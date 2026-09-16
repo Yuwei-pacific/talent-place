@@ -1,0 +1,16 @@
+{
+  "name": "poli-job-engine",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Standalone job search engine for POLI.design Talent Placement (A1-A4). No DSH dependency.",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node test/normalize-smoke.mjs && node test/prefilter-smoke.mjs && node test/labels-calibration.mjs && node test/geo-smoke.mjs && node test/history-smoke.mjs && node test/dedup-cards-smoke.mjs && node test/aggregators-smoke.mjs && node test/employer-smoke.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.0.0"
+  }
+}

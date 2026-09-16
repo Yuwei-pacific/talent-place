@@ -1,0 +1,106 @@
+# Coorte Accessory Design — bozza da completare.
+# null = informazione sconosciuta; [] = nessun dato ancora registrato.
+master_id: accessory-design
+edition: ED.14
+academic_year: 2027-28
+status: incomplete
+updated_on: "2026-09-10"
+
+# Storico Company Index di questo Master. Canonical: talent-place/index/Accessory_Design_Company_Index.csv.
+# Nuovo Master: nessuno storico precedente; il CSV nasce vuoto (solo header).
+# Le colonne First Contact Date e Recall vivono nel CSV (col 21-22), non nel Previous Contact List.
+history_file: ../../index/Accessory_Design_Company_Index.csv
+previous_reports: []
+previous_contact_list: null
+
+# Precedenza: vincoli confermati per il gruppo interessato, poi preferenze raccolte.
+# search_preferences è il fallback operativo, non una conferma degli studenti.
+# Contraddizioni sullo stesso gruppo: segnalare e chiarire prima di filtrare.
+# Le regole complete di esecuzione sono in ../A1-regole-ricerca.md.
+
+# Priorità di ricerca indicate dall'utente, non risposte degli studenti.
+# job_languages non certifica le lingue parlate dalla coorte.
+# Il Master è erogato in inglese (fonte: pagina ufficiale); l'italiano resta
+# lingua operativa per gli stage in Italia.
+search_preferences:
+  source: user_search_brief
+  confirmed_by_students: false
+  geography_priority:
+    - Milan
+    - Italy
+    - EU
+  job_languages:
+    - it
+    - en
+
+# Corso: 2027-02-01 – 2028-03-31 (fonte: pagina ufficiale POLI.design).
+# Finestra e monte ore dello stage NON pubblicati: non applicare date finché
+# il coordinamento non le conferma.
+availability:
+  start_date: null
+  end_date: null
+  required_hours: null
+  weekly_hours: null
+  source: null
+
+academic_requirements:
+  curricular_required: true
+  working_student_accepted: true
+  notes: null
+  source: null
+
+# Sintesi delle risposte effettive. Non attribuirla automaticamente a tutti.
+student_information:
+  total_students: null
+  responses_received: 0
+  source: null
+  collected_on: null
+  # Preferenze: elenchi di oggetti {value, student_count, source, collected_on}.
+  # professional_areas usa i nomi delle schede A2; luoghi dal più al meno preferito.
+  # ESEMPIO FITTIZIO, non dato reale:
+  # - {value: "Accessory Product Design", student_count: 4, source: "survey", collected_on: "2026-09-01"}
+  # student_count: null se sconosciuto; le persone possono scegliere più opzioni.
+  preferred_professional_areas: []
+  preferred_sectors: []
+  preferred_company_types: []
+  preferred_locations: []
+  # Vincoli: {constraint, applies_to, confirmed, source, collected_on}.
+  # applies_to: "entire_cohort" solo se confermato per tutti, altrimenti gruppo
+  # identificato nella fonte individual_records. Non inferire un vincolo collettivo.
+  mandatory_location_constraints: []
+  # Lingue: {language, level, student_count, source, collected_on}.
+  # level: livello QCER A1-C2, oppure null se non disponibile.
+  language_levels: []
+  # Capacità: {area, competency, student_count, evidence, source, collected_on}.
+  # area corrisponde a una scheda A2; evidence è un elenco di riferimenti reali.
+  demonstrated_competencies: []
+  # Strumenti: {name, student_count, evidence, source, collected_on}.
+  tools: []
+  # Riferimenti: {label, location}; location è un URL o percorso accessibile.
+  evidence_references: []
+
+design_lab:
+  interested_students: null
+  available_from: null
+  available_until: null
+  weekly_hours: null
+  # null se non raccolto; altrimenti conteggi aggregati:
+  # {stage: null, design_lab: null, either: null, unanswered: null}
+  # Conteggi riferiti allo stesso gruppo, senza duplicare gli studenti.
+  preference_stage_lab_or_either: null
+  source: null
+
+# Collegare eventuali tabelle/CV/portfolio esistenti, senza copiarne i dati.
+individual_records:
+  source: null
+  last_checked: null
+
+notes: |
+  Master erogato in inglese, XIV edizione 01.02.2027–31.03.2028, 25 posti,
+  60 CFU/ECTS (fonte: pagina ufficiale). Ore e condizioni dello stage non
+  pubblicate: è possibile cercare usando le priorità operative dichiarate.
+  Finché mancano dati degli studenti, non confermare compatibilità
+  individuale, disponibilità immediata, livelli linguistici o fattibilità del
+  calendario di un Design Lab. Le regole generali di ricerca, inclusa
+  l'esclusione del fully remote, restano nel documento condiviso delle
+  regole di ricerca.

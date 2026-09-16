@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "lib",
+    "strict": true,
+    "declaration": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/types.ts", "src/normalize.ts", "src/prefilter.ts", "src/labels.ts", "src/observe.ts", "src/history.ts", "src/geo.ts", "src/discovery/http.ts", "src/discovery/linkedin-guest.ts", "src/discovery/ats.ts", "src/discovery/aggregators.ts", "src/discovery/employer.ts", "src/dedup-cards.ts"]
+}

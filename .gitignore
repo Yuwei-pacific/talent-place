@@ -1,0 +1,8 @@
+# macOS
+.DS_Store
+
+# Node build output — tests import from lib/, but `npm test` runs `npm run build` first
+engine/lib/
+
+# Dependencies
+node_modules/
