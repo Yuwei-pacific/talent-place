@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node test/normalize-smoke.mjs && node test/prefilter-smoke.mjs && node test/labels-calibration.mjs && node test/geo-smoke.mjs && node test/history-smoke.mjs && node test/dedup-cards-smoke.mjs && node test/aggregators-smoke.mjs && node test/employer-smoke.mjs"
+    "test": "npm run build && node test/normalize-smoke.mjs && node test/multivalue-smoke.mjs && node test/prefilter-smoke.mjs && node test/labels-calibration.mjs && node test/geo-smoke.mjs && node test/history-smoke.mjs && node test/dedup-cards-smoke.mjs && node test/aggregators-smoke.mjs && node test/employer-smoke.mjs && python3 python/test_sync_export.py"
   },
   "dependencies": {},
   "devDependencies": {

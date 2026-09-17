@@ -6,3 +6,15 @@ engine/lib/
 
 # Dependencies
 node_modules/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Sync-export scratch: machine CSVs, run manifests, pre-write backups.
+# These are regenerated per run and the backups can be large.
+_machine/
+Review-additions-*.csv
+
+# Pre-write backups of the canonical CSV (git already tracks the file itself).
+index/_backups/

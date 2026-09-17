@@ -1,0 +1,7 @@
+kind;company_or_cells;row_indexes;shared_proposed_id;note
+duplicate_name;JAKALA;31|80;polids-ce64c790;"two rows share a name; NOT merged - resolve by hand"
+duplicate_name;KPMG;33|79;polids-7187734f;"two rows share a name; NOT merged - resolve by hand"
+duplicate_name;NTT DATA;39|106;polids-ba78d0e4;"two rows share a name; NOT merged - resolve by hand"
+duplicate_name;PwC;49|89;polids-c3a07591;"two rows share a name; NOT merged - resolve by hand"
+duplicate_name;TeamViewer;59|108;polids-884fbf81;"two rows share a name; NOT merged - resolve by hand"
+stray_row;First Contact Date=03/09/2026;82;;"content with no company name; NOT assigned an id - attribute by hand"
