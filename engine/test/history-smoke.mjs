@@ -2,7 +2,9 @@
 import { strict as assert } from 'node:assert';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { loadHistory, checkDup } from '../lib/history.js';
+import { readFileSync } from 'node:fs';
+import { loadHistory, checkDup, stripSeatSuffix } from '../lib/history.js';
+import { splitColumn } from '../lib/normalize.js';
 
 // Resolved relative to this file so the test is not machine-specific.
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -93,4 +95,69 @@ assert.equal(
   'a known company+title+city must dedup regardless of URL',
 );
 
-console.log(`history-smoke: OK (${h.size} companies, ${checked} URLs round-tripped)`);
+// ---------------------------------------------------------------------------
+// Invariant: the seat suffix in `Matching Job Titles` must not break the key.
+//
+// History rows store "<Title> — <Location>". The role key is built from the bare
+// title, so a row that keeps the suffix produces a key no lookup can reach —
+// `normTitle` folds the dash away and glues the location onto the title, giving
+// `x:foorban|customer care intern rho italy|rho` where the lookup builds
+// `x:foorban|customer care intern|rho`. checkDup then only ever fires on an
+// exact URL hit, so the same role re-posted under a new job id reads as new.
+//
+// The cross-portal check above CANNOT see this: it pulls the title back OUT of
+// a key and feeds it in, so it passes whatever the key happened to be built
+// from. This one starts from the cell, which is the only honest starting point.
+// ---------------------------------------------------------------------------
+const splitCsvLine = (line) => {
+  const out = [];
+  let cur = '';
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQ) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false;
+      } else cur += ch;
+    } else if (ch === '"') inQ = true;
+    else if (ch === ';') { out.push(cur); cur = ''; } else cur += ch;
+  }
+  out.push(cur);
+  return out;
+};
+
+const raw = readFileSync(CSV, 'utf-8').replace(/^﻿/, '');
+const cellHeader = splitCsvLine(raw.split('\n')[0]);
+const iCo = cellHeader.indexOf('Company / Outreach Account');
+const iTitle2 = cellHeader.indexOf('Matching Job Titles');
+const iLoc2 = cellHeader.indexOf('Locations');
+
+const unreachable = [];
+let rolesSeen = 0;
+for (const line of raw.split('\n').slice(1)) {
+  if (!line.trim()) continue;
+  const cols = splitCsvLine(line);
+  const company = (cols[iCo] || '').trim();
+  if (!company) continue;
+  const titles = splitColumn(cols[iTitle2] || '', 'Matching Job Titles');
+  const locs = splitColumn(cols[iLoc2] || '', 'Locations');
+  titles.forEach((t, idx) => {
+    const bare = stripSeatSuffix(t);
+    if (!bare) return;
+    rolesSeen++;
+    // A never-seen URL forces the key to do the work: the URL check cannot help.
+    const verdict = checkDup(h, company, bare, locs[idx] || locs[0] || '', 'https://example.com/never-seen-url');
+    if (verdict.dup !== true) unreachable.push(`${company}: ${bare}`);
+  });
+}
+assert.ok(rolesSeen > 50, `expected to walk >50 history roles, only saw ${rolesSeen}`);
+assert.deepEqual(
+  unreachable,
+  [],
+  `${unreachable.length}/${rolesSeen} history roles are unreachable by company+title+location ` +
+    `(checkDup only matches their URL):\n${unreachable.slice(0, 5).join('\n')}`,
+);
+
+console.log(
+  `history-smoke: OK (${h.size} companies, ${checked} URLs round-tripped, ${rolesSeen} role keys reachable)`,
+);

@@ -38,6 +38,18 @@ function normUrl(u: string): string {
   return u.trim().replace(/\/+$/, '').toLowerCase();
 }
 
+/**
+ * `Matching Job Titles` holds "<Title> — <Location>", because that is how a run
+ * records the seat each role sits in. The role key is built from the bare
+ * title, so the suffix must come off or every key built from such a row misses.
+ *
+ * Only the em/en dash separates: a plain hyphen is part of real titles
+ * ("Customer Care - Intern") and stripping on it would truncate them.
+ */
+export function stripSeatSuffix(title: string): string {
+  return title.replace(/\s*[—–]\s*.*$/, '').trim();
+}
+
 /** Split CSV text into records, respecting quoted embedded newlines. */
 function splitRecords(text: string): string[] {
   const records: string[] = [];
@@ -98,7 +110,7 @@ export function loadHistory(csvPath: string): Map<string, HistoryEntry> {
     }
     for (const l of links) entry.urls.add(normUrl(l));
     titles.forEach((t, idx) => {
-      if (t) entry!.keys.add(crossPortalKey(company, t, locs[idx] || locs[0] || ''));
+      if (t) entry!.keys.add(crossPortalKey(company, stripSeatSuffix(t), locs[idx] || locs[0] || ''));
     });
   }
   return byCompany;
