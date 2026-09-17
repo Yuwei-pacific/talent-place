@@ -23,14 +23,22 @@ def parse_semicolon_csv(path: Path) -> tuple[list[str], list[list[str]]]:
     return rows[0], rows[1:]
 
 
-def split_multi(cell: str) -> list[str]:
-    """Split a multi-value cell. Canonical uses newline inside quoted fields;
-    TSV input uses ' | '. Accept both. Themes use ';' as separator."""
-    if not cell.strip():
-        return []
-    if "\n" in cell:
-        return [p.strip() for p in cell.split("\n") if p.strip()]
-    return [p.strip() for p in cell.split("|") if p.strip()]
+# Splitting is delegated to reconcile.py, keyed by COLUMN NAME. The local
+# version here split on '|' only, which disagreed with history.ts and with the
+# shipped TSVs: `Sources / Portals` is written with '; ' but was split on '|',
+# so a whole cell was treated as one item. One implementation, one policy table.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from reconcile import propose_company_id, split_column  # noqa: E402
+
+
+def split_multi(cell: str, column: str) -> list[str]:
+    """Split a canonical multi-value cell, using the per-column separator policy."""
+    try:
+        return split_column(cell, column)
+    except KeyError:
+        # A free-text or unknown column: treat as a single value rather than
+        # guessing at separators.
+        return [cell.strip()] if cell.strip() else []
 
 
 split_numbered = split_multi  # backward-compat alias
@@ -66,10 +74,16 @@ def main() -> None:
     rows = [dict(zip(header, ln.split("\t"))) for ln in lines[1:]]
     hdr, existing = parse_semicolon_csv(path)
     idx = {name: hdr.index(name) for name in header if name in hdr}
-    by_company = {}
+    # Collect EVERY row per company. The old code did
+    # `by_company[name] = r`, so a duplicated name silently kept only the last
+    # row -- an UPDATE for KPMG merged into row 79 and left row 33 permanently
+    # unreachable. The canonical CSV has 5 such names.
+    by_company: dict[str, list[list[str]]] = {}
     for r in existing:
         if r and r[0].strip():
-            by_company[r[0].strip().lower()] = r
+            by_company.setdefault(r[0].strip().lower(), []).append(r)
+    duplicated = {k: v for k, v in by_company.items() if len(v) > 1}
+    ambiguous_updates: list[str] = []
     added = updated = 0
     for row in rows:
         company = row.get("Company / Outreach Account", "").strip()
@@ -82,19 +96,31 @@ def main() -> None:
             cells.append("")
         key = company.lower()
         if key not in by_company:
+            cells[hdr.index("Company ID")] = propose_company_id(company) if "Company ID" in hdr else ""
             existing.append(cells)
-            by_company[key] = cells
+            by_company[key] = [cells]
             added += 1
+        elif key in duplicated:
+            # Refuse rather than pick a row: merging into either one would force a
+            # choice between two sets of human-owned contact fields.
+            ambiguous_updates.append(company)
         else:
             # Company known (NEW or UPDATE prefix): merge new roles in
-            target = by_company[key]
+            target = by_company[key][0]
             merge_into(target, row, hdr)
             updated += 1
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f, delimiter=";")
         writer.writerow(hdr)
         writer.writerows(existing)
-    print(json.dumps({"ok": True, "added": added, "updated": updated}))
+    result = {"ok": True, "added": added, "updated": updated}
+    if ambiguous_updates:
+        result["refused_ambiguous"] = ambiguous_updates
+        result["note"] = (
+            "these companies appear on more than one canonical row; not merged. "
+            "Resolve the duplicate first (see duplicate-names-report.csv)."
+        )
+    print(json.dumps(result))
 
 
 def merge_into(target: list[str], row: dict, hdr: list[str]) -> None:
@@ -110,12 +136,12 @@ def merge_into(target: list[str], row: dict, hdr: list[str]) -> None:
     def plain(s: str) -> str:
         return re.sub(r"^\d+\.\s*", "", s.strip())
 
-    new_titles = split_multi(row.get("Matching Job Titles", ""))
-    new_links = split_multi(row.get("Job Links", ""))
-    new_locs = split_multi(row.get("Locations", ""))
-    cur_titles = split_multi(target[col("Matching Job Titles")])
-    cur_links = split_multi(target[col("Job Links")])
-    cur_locs = split_multi(target[col("Locations")])
+    new_titles = split_multi(row.get("Matching Job Titles", ""), "Matching Job Titles")
+    new_links = split_multi(row.get("Job Links", ""), "Job Links")
+    new_locs = split_multi(row.get("Locations", ""), "Locations")
+    cur_titles = split_multi(target[col("Matching Job Titles")], "Matching Job Titles")
+    cur_links = split_multi(target[col("Job Links")], "Job Links")
+    cur_locs = split_multi(target[col("Locations")], "Locations")
     cur_set = {plain(c).lower() for c in cur_titles}
     for i, t in enumerate(new_titles):
         if plain(t).lower() in cur_set:
@@ -132,17 +158,19 @@ def merge_into(target: list[str], row: dict, hdr: list[str]) -> None:
     import re as _re
 
     target[col("Locations")] = "\n".join(_re.sub(r"^\d+\.\s*", "", c).strip() for c in cur_locs)
-    for name in ["Strategic-fit Themes", "Work Modes", "Sources / Portals"]:
+    for name in ["Master-fit Themes", "Work Modes", "Sources / Portals"]:
         if name not in row:
             continue
-        sep = ";" if name == "Strategic-fit Themes" else "|"
+        # Separator now comes from reconcile.MULTI_VALUE_SPEC via split_multi,
+        # so this no longer guesses '|' where the TSV writes '; '.
+        sep = ";" if name == "Master-fit Themes" else "|"
         cur = [p.strip() for p in target[col(name)].replace("\n", "|").split(sep) if p.strip()]
-        new = split_multi(row[name])
+        new = split_multi(row[name], name)
         for item in new:
             if plain(item).lower() not in {plain(c).lower() for c in cur}:
                 cur.append(item)
         # themes use "; " (canonical), modes/sources use newline (canonical cells)
-        joiner = "; " if name == "Strategic-fit Themes" else "\n"
+        joiner = "; " if name == "Master-fit Themes" else "\n"
         seen: set[str] = set()
         uniq = []
         for c in cur:
@@ -152,7 +180,7 @@ def merge_into(target: list[str], row: dict, hdr: list[str]) -> None:
                 uniq.append(plain(c))
         target[col(name)] = joiner.join(uniq)
     # Role Count = number of titles
-    titles = split_multi(target[col("Matching Job Titles")])
+    titles = split_multi(target[col("Matching Job Titles")], "Matching Job Titles")
     target[col("Role Count")] = str(len(titles))
     # Notes: append new notes
     if row.get("Notes"):
@@ -166,7 +194,9 @@ def merge_into(target: list[str], row: dict, hdr: list[str]) -> None:
     if row.get("Curricular Evidence") and row["Curricular Evidence"] not in target[col("Curricular Evidence")]:
         target[col("Curricular Evidence")] = (target[col("Curricular Evidence")] + "; " + row["Curricular Evidence"]).strip("; ")
     # Never touch: Previously Contacted?, Contact Search Status, Contact Name/Role/Email,
-    # Outreach Decision, First Contact Date, Recall — human-owned columns.
+    # Outreach Decision, Reviewer Notes, First Contact Date, Recall — human-owned columns.
+    # `Reviewer Notes` is the split-out home of colleague prose; this script writes
+    # only machine text, into `Notes`, so the two can never fuse.
 
 
 main()
