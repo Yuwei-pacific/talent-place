@@ -9,7 +9,10 @@ updated_on: "2026-09-10"
 
 # Storico Company Index di questo Master. Canonical: talent-place/index/Strategic_Design_Company_Index.csv.
 # Il vecchio xlsx 2026-08-31 e in archive/archive-2026-09-10/.
-# Le colonne First Contact Date e Recall vivono nel CSV (col 20-21), non nel Previous Contact List.
+# Le colonne First Contact Date (col 21) e Recall (col 22) vivono nel CSV, non nel
+# Previous Contact List. Company ID (col 23) e' un'identita' stabile, assegnata una
+# volta e mai ricalcolata: 5 nomi compaiono su due righe e condividono un id
+# proposto, quindi restano ambigui finche' una persona non li risolve.
 history_file: ../../index/Strategic_Design_Company_Index.csv
 previous_reports: []
 previous_contact_list: null

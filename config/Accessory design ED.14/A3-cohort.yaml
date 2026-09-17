@@ -8,7 +8,8 @@ updated_on: "2026-09-10"
 
 # Storico Company Index di questo Master. Canonical: talent-place/index/Accessory_Design_Company_Index.csv.
 # Nuovo Master: nessuno storico precedente; il CSV nasce vuoto (solo header).
-# Le colonne First Contact Date e Recall vivono nel CSV (col 21-22), non nel Previous Contact List.
+# Le colonne First Contact Date (col 21) e Recall (col 22) vivono nel CSV, non nel
+# Previous Contact List. Company ID (col 23): vedi A3 di Strategic Design ED.28.
 history_file: ../../index/Accessory_Design_Company_Index.csv
 previous_reports: []
 previous_contact_list: null
