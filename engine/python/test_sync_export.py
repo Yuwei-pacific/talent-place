@@ -558,8 +558,8 @@ class TestBackfillIds(TmpDirCase):
             self.assertTrue(b[idx].strip(), f"row {i} got no id")
 
     def test_positional_prefix_is_preserved(self):
-        """add_verified.py slices hdr[:22] and io.py's headers are positional, so
-        `Recall` must stay at index 21."""
+        """add_verified.py builds each appended row from `hdr[:len(header)]`, so
+        the first 22 columns must stay the A4 columns in order: `Recall` at 21."""
         p = self.make_csv([self.row("Alpha")])
         self.run_backfill(p)
         header, _ = self.read(p)

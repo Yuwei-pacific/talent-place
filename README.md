@@ -21,8 +21,7 @@ talent-place/
 │   │   ├── sync_export.py       # pubblica un giro nella cartella sincronizzata
 │   │   ├── reconcile.py         # lettura canonical, ownership colonne, matching
 │   │   ├── synced_fs.py         # guardie di scrittura sul mount OneDrive
-│   │   ├── add_verified.py      # righe confermate -> CSV canonico
-│   │   └── io.py                # LEGACY (xlsx), non è nel percorso attuale
+│   │   └── add_verified.py      # righe confermate -> CSV canonico
 │   └── package.json (npm test)
 ├── outputs/                     # output-YYYY-MM-DD.tsv per ogni ricerca
 └── index/

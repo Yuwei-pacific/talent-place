@@ -77,8 +77,8 @@ A4_COLUMNS = [
     "Recall",
 ]
 
-# Per-role sheet. Restores io.py's original `Role Evidence` design, which the
-# flat 22-column projection had destroyed.
+# Per-role sheet. Restores the retired io.py's original `Role Evidence` design,
+# which the flat 22-column projection had destroyed.
 ROLE_COLUMNS = [
     "Company / Outreach Account",
     "Brand / Business Unit",
@@ -622,8 +622,9 @@ def cmd_stage(args: argparse.Namespace) -> int:
 def cmd_backfill_ids(args: argparse.Namespace) -> int:
     """Add a `Company ID` column to the canonical CSV.
 
-    Placed immediately after `Recall` so every positional reader that slices
-    `hdr[:22]` is unaffected (add_verified.py:79, io.py COMPANY_HEADERS).
+    Placed immediately after `Recall` so the positional readers are unaffected:
+    add_verified.py builds each appended row from `hdr[:len(header)]`, so the
+    first 22 canonical columns must stay the A4 columns in order.
 
     PROPOSE-ONLY for duplicate names. The canonical CSV has 5 names on two rows
     each, and merging them would force a choice between two sets of human-owned
