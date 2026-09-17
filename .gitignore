@@ -18,3 +18,5 @@ Review-additions-*.csv
 
 # Pre-write backups of the canonical CSV (git already tracks the file itself).
 index/_backups/
+.playwright-mcp/console-2026-09-17T09-13-16-548Z.log
+/.playwright-mcp
