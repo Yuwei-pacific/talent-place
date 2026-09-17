@@ -2,8 +2,9 @@
 // employer career-page fetch. Indeed direct HTTP is 403 from datacenter-class
 // clients, so Indeed stays L2-declared (public web discovery + employer verify)
 // unless a connector is provided at runtime.
-import type { Card, SourceAdapter } from '../types.js';
-import { fetchText } from './http.js';
+import type { Card, SourceAdapter, DiscoverContext } from '../types.js';
+import { fetchGuarded } from './http.js';
+import { stopSource } from '../ratelimit.js';
 
 interface AtsBoard {
   id: string;
@@ -14,12 +15,13 @@ interface AtsBoard {
 export function atsAdapter(boards: AtsBoard[]): SourceAdapter {
   return {
     id: 'ats',
-    async discover(queries: string[]): Promise<Card[]> {
+    async discover(queries: string[], ctx: DiscoverContext): Promise<Card[]> {
       const out: Card[] = [];
       for (const b of boards) {
+        if (ctx.stop.stopped) return out;
         try {
           if (b.kind === 'greenhouse') {
-            const res = await fetchText(`https://boards-api.greenhouse.io/v1/boards/${b.board}/jobs?content=false`);
+            const res = await fetchGuarded(`https://boards-api.greenhouse.io/v1/boards/${b.board}/jobs?content=false`, ctx.guard);
             if (!res.ok) continue;
             const data = JSON.parse(res.text) as { jobs?: Array<{ id: number; title: string; location?: { name?: string }; absolute_url: string }> };
             for (const j of data.jobs || []) {
@@ -36,7 +38,7 @@ export function atsAdapter(boards: AtsBoard[]): SourceAdapter {
               });
             }
           } else if (b.kind === 'lever') {
-            const res = await fetchText(`https://api.lever.co/v0/postings/${b.board}?mode=json`);
+            const res = await fetchGuarded(`https://api.lever.co/v0/postings/${b.board}?mode=json`, ctx.guard);
             if (!res.ok) continue;
             const data = JSON.parse(res.text) as Array<{ id: string; text: string; categories?: { location?: string }; hostedUrl: string }>;
             for (const j of data || []) {

@@ -7,8 +7,9 @@
 // You'll Get It: /internships?search= 308-redirects to a JS app shell with no
 // server-rendered postings — not script-fetchable. Kept out; its postings
 // still surface via WebFetch detail verification when needed.
-import type { Card, SourceAdapter } from '../types.js';
-import { fetchText } from './http.js';
+import type { Card, SourceAdapter, DiscoverContext } from '../types.js';
+import { fetchGuarded } from './http.js';
+import { stopSource } from '../ratelimit.js';
 
 function clean(s: string): string {
   return s
@@ -54,15 +55,19 @@ const CITY_SLUGS = ['milano', 'roma', 'torino', 'bologna', 'italia'];
 export function cercoLavoroAdapter(): SourceAdapter {
   return {
     id: 'cercolavoro',
-    async discover(queries: string[]): Promise<Card[]> {
+    async discover(queries: string[], ctx: DiscoverContext): Promise<Card[]> {
       const out: Card[] = [];
       for (const q of queries) {
         for (const city of CITY_SLUGS) {
+          if (ctx.stop.stopped) return out;
           const url = `https://www.cercolavoro.com/offerte-lavoro-${city}?ricerca=${encodeURIComponent(q)}`;
-          const res = await fetchText(url);
+          const res = await fetchGuarded(url, ctx.guard);
           if (!res.ok) continue; // one city failing never kills the run
           out.push(...parseCercoCards(res.text, `${q} @ ${city}`));
-          if (out.length >= 200) return out;
+          if (out.length >= ctx.cap) {
+            stopSource(ctx.stop, 'cap', `cap ${ctx.cap} reached`);
+            return out;
+          }
         }
       }
       return out;

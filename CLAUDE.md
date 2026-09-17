@@ -27,6 +27,8 @@ Search output used to be pasted into SharePoint by hand. It no longer is. Owners
 
 `Roles.xlsx` is **not** a review queue anyone merges — it is a rendering. That distinction matters: a machine file a human must merge back is just the paste step relocated.
 
+A run's TSV is the **input contract for `stage`**, not a deliverable. Producing a TSV and stopping hands the paste step back to a human, which is the one thing this loop exists to remove: a run is not finished until `stage` (and `append`) have run against the Master's folder. Handing over a TSV and saying "now paste this" is the failure mode, not the fallback.
+
 Command order for a weekly run:
 
 ```
@@ -57,7 +59,7 @@ All from `engine/`:
 ```bash
 npm run build       # tsc: src/ -> lib/
 npm run typecheck   # tsc --noEmit
-npm test            # build, then 10 node smoke tests, then the Python suite
+npm test            # build, then 12 node smoke tests, then the Python suite
 
 # single test — node tests import from lib/, so build first
 node test/geo-smoke.mjs
@@ -68,7 +70,19 @@ python3 python/sync_export.py <cmd> --help
 
 `npm test` is not a test runner; it is a shell `&&` chain in `package.json`. **To add a node test you must also append it to that chain** — nothing discovers it. Node tests are plain `node:assert` scripts that `console.log('<name>: OK')`. The Python suite is `unittest`, self-discovering within its one file.
 
-Three tests hit the live network (`aggregators-smoke`, `employer-smoke`, and `prefilter-smoke` indirectly) and fail without connectivity or when scraped markup changes.
+Only `employer-smoke` hits the live network, and because the chain is `&&` its failure also prevents the Python suite from running. Everything else — including `aggregators-smoke` (checked-in fixture) and every timing test (local `node:http` server) — is offline.
+
+### Running a search
+
+```bash
+npm run discover -- --config <run.json> --out <dir> [--history ../index/<Master>_Company_Index.csv]
+```
+
+`src/cli.ts` is the **deterministic half** of a run: query fan-out → discover → geo → dedup → prefilter → `cards.json` + `run-report.json`. It deliberately stops there. Reading each surviving description and judging it against A1 and the Master's A2 stays with the agent; putting that judgement behind a flag would make it a checkbox.
+
+`run-report.json` records per-source `requests / ok / 429 / 403 / stop_kind / reason`. That is the A1 "declare the reason" duty as data rather than prose.
+
+Before `src/cli.ts` existed, the adapters, `geoFilter`, `dedupCards`, `prefilter` and `observe` were all an uncalled library and the run loop lived in a throwaway script — so nothing about a run was reproducible. **If you find yourself writing a `/tmp` script to drive the adapters, that script belongs in `src/` instead.**
 
 ## The A1–A4 method
 

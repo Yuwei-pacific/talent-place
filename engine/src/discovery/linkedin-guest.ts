@@ -1,7 +1,8 @@
 // L0 adapter: LinkedIn public guest API (no login, no session).
 // Falls back to 'blocked' (L2) when challenged — never bypasses.
-import type { Card, SourceAdapter } from '../types.js';
-import { fetchText } from './http.js';
+import type { Card, SourceAdapter, DiscoverContext } from '../types.js';
+import { fetchGuarded } from './http.js';
+import { stopSource } from '../ratelimit.js';
 
 function decodeEntities(s: string): string {
   return s
@@ -16,26 +17,63 @@ function clean(s: string): string {
   return decodeEntities(s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')).trim();
 }
 
+/**
+ * The `base-card__full-link` anchor's href, attribute-order independent.
+ *
+ * Why this is not a global regex over the whole document any more:
+ *
+ * The previous implementation collected all links with one document-wide regex
+ * and zipped that array against `urns` **by index**, while deliberately
+ * excluding `links` from the `Math.min(...)` length guard. One card whose
+ * full-link anchor carries no `href` (or no such anchor at all) makes `links`
+ * one shorter than `urns`, and from that index onward EVERY card takes its
+ * neighbour's URL — the cascade was verified against the old code, not
+ * inferred.
+ *
+ * On the 2026-09-17 Strategic Design run, 11 of 284 cards came out with a URL
+ * belonging to a neighbouring posting: company and title right, link pointing
+ * at someone else's role. Reading the href out of the SAME block that carries
+ * title and urn confines that damage to the one malformed card, which falls
+ * back to its own urn URL, instead of re-labelling every card after it.
+ */
+function fullLinkIn(block: string): string | undefined {
+  for (const m of block.matchAll(/<a\b[^>]*>/g)) {
+    const tag = m[0];
+    if (!tag.includes('base-card__full-link')) continue;
+    const href = tag.match(/\bhref="([^"]+)"/);
+    if (href) return decodeEntities(href[1]);
+  }
+  return undefined;
+}
+
+/**
+ * Parse one guest SERP into cards.
+ *
+ * Parsed per `<li>` block, not by zipping global arrays: every field of a card
+ * must come from the same block, or a single malformed card silently re-labels
+ * its neighbours.
+ */
 export function parseGuestCards(html: string, discoveryQuery: string): Card[] {
-  const urns = [...html.matchAll(/data-entity-urn="urn:li:jobPosting:(\d+)"/g)].map((m) => m[1]);
-  const titles = [...html.matchAll(/base-search-card__title">\s*([\s\S]*?)\s*<\/h3>/g)].map((m) => clean(m[1]));
-  const subs = [...html.matchAll(/base-search-card__subtitle[^>]*>([\s\S]*?)<\/a>/g)].map((m) => clean(m[1]));
-  const locs = [...html.matchAll(/job-search-card__location">\s*([\s\S]*?)\s*<\/span>/g)].map((m) => clean(m[1]));
-  const links = [...html.matchAll(/<a[^>]+class="base-card__full-link[^"]*"[^>]+href="([^"]+)"/g)].map((m) =>
-    decodeEntities(m[1]),
-  );
-  const dates = [...html.matchAll(/<time[^>]*>([\s\S]*?)<\/time>/g)].map((m) => clean(m[1]));
-  const n = Math.min(urns.length, titles.length, subs.length, locs.length);
   const cards: Card[] = [];
-  for (let i = 0; i < n; i++) {
-    const url = (links[i] || `https://www.linkedin.com/jobs/view/${urns[i]}/`).split('?')[0];
+  for (const block of html.split('<li>').slice(1)) {
+    const urn = block.match(/data-entity-urn="urn:li:jobPosting:(\d+)"/)?.[1];
+    const title = block.match(/base-search-card__title">\s*([\s\S]*?)\s*<\/h3>/)?.[1];
+    if (!urn || !title) continue; // not a job card block
+    const company = block.match(/base-search-card__subtitle[^>]*>([\s\S]*?)<\/a>/)?.[1];
+    const loc = block.match(/job-search-card__location">\s*([\s\S]*?)\s*<\/span>/)?.[1];
+    const posted = block.match(/<time[^>]*>([\s\S]*?)<\/time>/)?.[1];
+    // Fallback to the urn URL only if the block carries no full-link anchor.
+    const url = (fullLinkIn(block) || `https://www.linkedin.com/jobs/view/${urn}/`).split('?')[0];
     cards.push({
-      title: titles[i],
-      company: subs[i],
-      location: locs[i],
+      title: clean(title),
+      company: company ? clean(company) : '',
+      location: loc ? clean(loc) : '',
       url,
-      snippet: dates[i] ? `posted: ${dates[i]}` : '',
-      sourceJobId: urns[i],
+      // Kept on the Card: freshness is how A1's "verify the opportunity is
+      // current" becomes checkable. It used to be dropped one stage later.
+      snippet: posted ? `posted: ${clean(posted)}` : '',
+      posted: posted ? clean(posted) : undefined,
+      sourceJobId: urn,
       source: 'linkedin',
       discoveryQuery,
     });
@@ -43,25 +81,34 @@ export function parseGuestCards(html: string, discoveryQuery: string): Card[] {
   return cards;
 }
 
-function guestUrl(keywords: string, location: string, start: number): string {
+function guestUrl(keywords: string, location: string, start: number, base: string): string {
   const q = new URLSearchParams({ keywords, location, start: String(start) });
-  return `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?${q.toString()}`;
+  return `${base}/jobs-guest/jobs/api/seeMoreJobPostings/search?${q.toString()}`;
 }
 
-export function linkedinGuestAdapter(locations: string[]): SourceAdapter {
+export function linkedinGuestAdapter(
+  locations: string[],
+  opts: { baseUrl?: string } = {},
+): SourceAdapter {
+  const base = opts.baseUrl ?? 'https://www.linkedin.com';
   return {
     id: 'linkedin-guest',
-    async discover(queries: string[]): Promise<Card[]> {
+    async discover(queries: string[], ctx: DiscoverContext): Promise<Card[]> {
       const out: Card[] = [];
       for (const q of queries) {
         for (const loc of locations) {
-          const res = await fetchText(guestUrl(q, loc, 0));
-          if (!res.ok) {
-            if (res.kind === 'gone') continue;
-            throw new Error(`linkedin-guest ${res.kind}: ${res.detail}`);
-          }
+          if (ctx.stop.stopped) return out;
+          // Was `throw new Error(...)` on any non-gone failure, so a single 403
+          // or 429 aborted every remaining query and lost the whole source's
+          // output. Every other adapter continues; this one now does too, and
+          // the StopToken decides when the source is genuinely finished.
+          const res = await fetchGuarded(guestUrl(q, loc, 0, base), ctx.guard);
+          if (!res.ok) continue;
           out.push(...parseGuestCards(res.text, `${q} — ${loc}`));
-          if (out.length >= 200) return out;
+          if (out.length >= ctx.cap) {
+            stopSource(ctx.stop, 'cap', `cap ${ctx.cap} reached`);
+            return out;
+          }
         }
       }
       return out;
