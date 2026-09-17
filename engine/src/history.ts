@@ -1,10 +1,12 @@
 // History = canonical Excel/CSV (semicolon-delimited, A4 columns).
 // Read-only for search; add-verified is the only writer.
 import { readFileSync } from 'node:fs';
-import { crossPortalKey } from './normalize.js';
+import { crossPortalKey, splitColumn } from './normalize.js';
 
 export interface HistoryEntry {
   company: string;
+  /** Stored identity, when the `Company ID` column is present. */
+  companyId?: string;
   urls: Set<string>;
   keys: Set<string>;
 }
@@ -75,18 +77,23 @@ export function loadHistory(csvPath: string): Map<string, HistoryEntry> {
   const iTitles = ci('Matching Job Titles');
   const iLinks = ci('Job Links');
   const iLocs = ci('Locations');
+  // Appended column; absent until backfill-ids has run.
+  const iCompanyId = ci('Company ID');
   const byCompany = new Map<string, HistoryEntry>();
   for (const line of records.slice(1)) {
     const cols = splitCsvLine(line);
     const company = (cols[iCompany] || '').trim();
     if (!company || company === 'Company / Outreach Account') continue;
-    const titles = (cols[iTitles] || '').split('|').map((t) => t.replace(/^\d+\.\s*/, '').trim());
-    const links = (cols[iLinks] || '').split('|').map((l) => l.replace(/^\d+\.\s*/, '').trim()).filter(Boolean);
-    const locs = (cols[iLocs] || '').split('|').map((l) => l.replace(/^\d+\.\s*/, '').trim());
+    // Was `.split('|')`, which silently produced a concatenated multi-URL blob
+    // for every row whose cells use embedded newlines (24 of 113 companies),
+    // making checkDup unable to ever report a duplicate for them.
+    const titles = splitColumn(cols[iTitles] || '', 'Matching Job Titles');
+    const links = splitColumn(cols[iLinks] || '', 'Job Links');
+    const locs = splitColumn(cols[iLocs] || '', 'Locations');
     const key = company.toLowerCase();
     let entry = byCompany.get(key);
     if (!entry) {
-      entry = { company, urls: new Set(), keys: new Set() };
+      entry = { company, companyId: iCompanyId >= 0 ? (cols[iCompanyId] || '').trim() || undefined : undefined, urls: new Set(), keys: new Set() };
       byCompany.set(key, entry);
     }
     for (const l of links) entry.urls.add(normUrl(l));
