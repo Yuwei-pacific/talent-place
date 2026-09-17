@@ -146,6 +146,42 @@ export class RateLimiter {
   }
 }
 
+/**
+ * Run `fn` over `items` with at most `width` in flight, preserving input order.
+ *
+ * This is NOT `Promise.all(items.map(fn))`. That is unbounded, which is the
+ * failure this function exists to prevent — and the failure is invisible,
+ * because it produces correct results faster.
+ *
+ * Width is a LATENCY-HIDING knob, not a politeness one. Against a limiter it
+ * changes how many requests are outstanding, never how often one leaves: a
+ * 1600ms gap makes a pool of width 8 behave like width 1 for the server,
+ * because in-flight count cannot exceed 1 when the gap exceeds the response
+ * time. Changing width must therefore not change the achieved rate, and
+ * `test/ratelimit-width-invariance.mjs` asserts exactly that — if someone
+ * later "optimises" by awaiting before reserving, that test is where it fails.
+ */
+export async function mapPool<T, R>(
+  items: readonly T[],
+  width: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const n = items.length;
+  const results = new Array<R>(n);
+  if (n === 0) return results;
+  const workers = Math.max(1, Math.min(Math.floor(width) || 1, n));
+  let cursor = 0;
+  const run = async (): Promise<void> => {
+    for (;;) {
+      const i = cursor++;
+      if (i >= n) return;
+      results[i] = await fn(items[i], i); // by index, so order is input order
+    }
+  };
+  await Promise.all(Array.from({ length: workers }, run));
+  return results;
+}
+
 // ---------------------------------------------------------------------------
 // Per-source stop state.
 //

@@ -16,14 +16,17 @@
 //     A1/A4 "declare the reason" obligation expressed as a return value rather
 //     than an exception nobody catches.
 //
-// What it deliberately does NOT own yet (see the plan, Phase 2):
-//   * a worker pool. Phase 1 is serial. Concurrency is a latency-hiding
-//     mechanism and must not be introduced before the politeness layer it
-//     would sit on top of exists and is tested.
-//   * any rate ramp. See the header of ../ratelimit.ts for why.
+// Concurrency lives here as POOL WIDTH, never as a rate. Each source keeps its
+// own limiter, so running sources (or query pairs within a source) in parallel
+// changes how many requests are outstanding and never how often one leaves.
+// `test/ratelimit-width-invariance.mjs` asserts that, because the failure mode
+// is a "faster" run that is simply less polite.
+//
+// What it still deliberately does NOT own: any rate ramp. See the header of
+// ../ratelimit.ts for why that absence is load-bearing.
 import type { Card, SourceAdapter } from '../types.js';
 import type { Guard, SourceHealth, StopKind } from '../ratelimit.js';
-import { RateLimiter, newSourceHealth, newStopToken, stopSource } from '../ratelimit.js';
+import { RateLimiter, mapPool, newSourceHealth, newStopToken, stopSource } from '../ratelimit.js';
 import { linkedinGuestAdapter } from './linkedin-guest.js';
 
 /**
@@ -67,6 +70,10 @@ export const DEFAULT_CAP = 5000;
 export interface RunOptions {
   rates?: Record<string, number>;
   cap?: number;
+  /** How many SOURCES may run at once. Each keeps its own limiter, so this
+   *  cannot raise any single source's request rate — it only stops a slow
+   *  source from idling the ones behind it. Default 3. */
+  sourceWidth?: number;
   /** Test seam: build a source's guard yourself. */
   guardFor?: (id: string, limiter: RateLimiter) => Guard;
 }
@@ -102,10 +109,13 @@ export async function runDiscovery(
   opts: RunOptions = {},
 ): Promise<RunResult> {
   const cap = opts.cap ?? DEFAULT_CAP;
-  const cards: Card[] = [];
-  const report: SourceReport[] = [];
 
-  for (const adapter of adapters) {
+  // One limiter, one StopToken and one health record PER SOURCE, built here and
+  // never stored in a module global: a global leaks rate and stop state across
+  // runs and across tests. Sources run concurrently because each carries its
+  // own limiter — that is what makes a throttled source unable to stall a
+  // healthy one, and why `sourceWidth` cannot raise any single source's rate.
+  const runs = await mapPool(adapters, opts.sourceWidth ?? 3, async (adapter) => {
     const limiter = new RateLimiter({ ratePerSec: opts.rates?.[adapter.id] ?? DEFAULT_RATES[adapter.id] ?? 1 });
     const stop = newStopToken();
     const health = newSourceHealth();
@@ -118,18 +128,20 @@ export async function runDiscovery(
       stopSource(stop, 'error', err instanceof Error ? err.message : String(err));
       got = [];
     }
-    cards.push(...got);
-    report.push({
-      id: adapter.id,
-      status: statusOf(stop.kind),
-      cards: got.length,
-      reason: stop.reason,
-      elapsedMs: Date.now() - t0,
-      health,
-    });
-  }
+    return {
+      cards: got,
+      report: {
+        id: adapter.id,
+        status: statusOf(stop.kind),
+        cards: got.length,
+        reason: stop.reason,
+        elapsedMs: Date.now() - t0,
+        health,
+      } satisfies SourceReport,
+    };
+  });
 
-  return { cards, report };
+  return { cards: runs.flatMap((r) => r.cards), report: runs.map((r) => r.report) };
 }
 
 /**

@@ -30,8 +30,13 @@ from datetime import datetime  # noqa: E402
 
 from sync_export import (  # noqa: E402
     A4_COLUMNS,
+    NOT_RECOVERABLE_FROM_FLAT_TSV,
+    StageError,
+    load_evidence,
+    norm_role_url,
     REVIEW_COLUMNS,
     VERIFICATION_PREFIXES,
+    explode_roles,
     validate_rows,
 )
 from reconcile import (  # noqa: E402
@@ -243,6 +248,108 @@ PARITY_CASES = [
     ("Job Links", "1. https://x.example/job?id=13727121_it"),
     ("Job Links", "https://a.example/1 | https://b.example/2"),
 ]
+
+
+class TestRoleEvidence(TmpDirCase):
+    """`Roles.xlsx` is where a colleague clicks through to ONE posting, so a
+    wrong Primary Job URL there sends them to the wrong job.
+
+    Regression: `explode_roles` indexed `Job Links` through the column's default
+    splitter, which expands the `alt.` mirror into a list item of its own. The
+    index addresses a ROLE, so every role after the first mirror took the wrong
+    URL — verified against the pre-fix code before it was changed.
+    """
+
+    def _row(self, links: str, titles: str, count: str) -> list[str]:
+        row = [
+            "Amplifon", "", "Yes", "Milan, Lombardy, Italy", "CRM / Customer Intelligence",
+            titles, links, count, "", "", "", "No", "Not started", "", "", "", "Review",
+            "", "Portal verified", "2026-09-17", "", "",
+        ]
+        self.assertEqual(len(row), len(A4_COLUMNS))
+        return row
+
+    def test_alt_mirror_does_not_consume_a_role_index(self):
+        row = self._row(
+            "1. https://a.example/1 alt. https://a-mirror.example/1 | "
+            "2. https://a.example/2 alt. https://a-mirror.example/2 | "
+            "3. https://a.example/3",
+            "1. First Intern | 2. Second Intern | 3. Third Intern",
+            "3",
+        )
+        roles, _ = explode_roles([row])
+        self.assertEqual([r["Job Title"] for r in roles], ["First Intern", "Second Intern", "Third Intern"])
+        self.assertEqual([r["Primary Job URL"] for r in roles],
+                         ["https://a.example/1", "https://a.example/2", "https://a.example/3"])
+        self.assertEqual([r["Alternate / Portal URLs"] for r in roles],
+                         ["https://a-mirror.example/1", "https://a-mirror.example/2", ""])
+
+    def test_alternate_column_is_recovered_not_declared_unrecoverable(self):
+        # It is carried by the TSV's own `alt.` marker, so it no longer belongs
+        # in the set of columns a live run cannot supply.
+        self.assertNotIn("Alternate / Portal URLs", NOT_RECOVERABLE_FROM_FLAT_TSV)
+        self.assertIn("Posted / Result Age", NOT_RECOVERABLE_FROM_FLAT_TSV)
+
+    def _write_evidence(self, text: str) -> str:
+        path = Path(self.tmp) / "role-evidence.csv"
+        path.write_text(text, encoding="utf-8")
+        return str(path)
+
+    def test_evidence_fills_the_columns_a_flat_tsv_cannot_carry(self):
+        ev = load_evidence(
+            self._write_evidence(
+                "url;posted;alternate_urls;search_query\n"
+                "https://x.example/job/1;3 days ago;https://mirror.example/1;service design stage\n"
+            )
+        )
+        self.assertIn("https://x.example/job/1", ev)
+        self.assertEqual(ev["https://x.example/job/1"]["posted"], "3 days ago")
+        self.assertEqual(ev["https://x.example/job/1"]["alternate_urls"], "https://mirror.example/1")
+
+    def test_evidence_joins_on_a_normalised_url(self):
+        # A run's URL may carry campaign parameters the TSV's does not; the key
+        # has to survive that or the evidence silently never lands.
+        ev = load_evidence(self._write_evidence("url;posted;alternate_urls;search_query\nhttps://x.example/job/1?utm=abc;1 week ago;;q\n"))
+        self.assertIn(norm_role_url("https://x.example/job/1/"), ev)
+
+    def test_a_malformed_evidence_file_is_refused_not_ignored(self):
+        bad = self._write_evidence("url;posted\nhttps://x.example/1;today\n")
+        with self.assertRaises(StageError) as ctx:
+            load_evidence(bad)
+        self.assertIn("missing column", str(ctx.exception))
+
+    def test_no_evidence_leaves_the_columns_empty(self):
+        self.assertEqual(load_evidence(None), {})
+        self.assertEqual(load_evidence(""), {})
+
+    def test_explode_roles_applies_evidence_to_the_matching_role_only(self):
+        row = self._row(
+            "1. https://a.example/1 | 2. https://a.example/2",
+            "1. First Intern | 2. Second Intern",
+            "2",
+        )
+        roles, _ = explode_roles([row], {"https://a.example/2": {"posted": "5 days ago", "search_query": "q2", "alternate_urls": ""}})
+        self.assertEqual(roles[0]["Posted / Result Age"], "")
+        self.assertEqual(roles[1]["Posted / Result Age"], "5 days ago")
+        self.assertEqual(roles[1]["Search Query"], "q2")
+        self.assertEqual(roles[0]["Search Query"], "")
+
+    def test_un_numbered_links_still_align_by_position(self):
+        row = self._row(
+            "https://a.example/1 | https://a.example/2",
+            "1. First Intern | 2. Second Intern",
+            "2",
+        )
+        roles, _ = explode_roles([row])
+        self.assertEqual([r["Primary Job URL"] for r in roles],
+                         ["https://a.example/1", "https://a.example/2"])
+
+    def test_a_shorter_link_list_falls_back_without_inventing_a_url(self):
+        row = self._row("1. https://a.example/1", "1. First Intern | 2. Second Intern", "2")
+        roles, _ = explode_roles([row])
+        self.assertEqual(roles[0]["Primary Job URL"], "https://a.example/1")
+        self.assertEqual(roles[1]["Primary Job URL"], "https://a.example/1")
+        self.assertEqual(roles[1]["Alternate / Portal URLs"], "")
 
 
 class TestSplitter(TmpDirCase):

@@ -99,6 +99,23 @@ async function main(): Promise<number> {
   const result = await runPipeline(adapters, cfg, { historyDup: historySplit(args.history) });
 
   writeFileSync(join(outDir, 'cards.json'), JSON.stringify(result.kept, null, 1));
+
+  // Per-role evidence that A4's fixed 22-column TSV has nowhere to put. `stage`
+  // reads it back with --evidence and fills Roles.xlsx's `Posted / Result Age`,
+  // `Search Query` and `Alternate / Portal URLs`. Without it those columns are
+  // declared unrecoverable and stay empty, which is how the freshness signal
+  // A1 asks for ("verify the opportunity is current") got lost entirely.
+  //
+  // Semicolon-delimited like the canonical CSV; cells are stripped of tabs and
+  // newlines so a value can never break the row.
+  const cell = (v: string) => v.replace(/[\t\r\n;]+/g, ' ').trim();
+  const evidence = [
+    ['url', 'posted', 'alternate_urls', 'search_query'].join(';'),
+    ...result.kept.map((c) =>
+      [cell(c.url), cell(c.posted ?? ''), cell((c.alternateUrls ?? []).join(' | ')), cell(c.discoveryQuery)].join(';'),
+    ),
+  ];
+  writeFileSync(join(outDir, 'role-evidence.csv'), evidence.join('\n') + '\n');
   writeFileSync(
     join(outDir, 'dropped.json'),
     JSON.stringify({ prefilterDropped: result.dropped, nonEu: result.droppedNonEu, duplicates: result.duplicates }, null, 1),

@@ -2,7 +2,7 @@
 // Falls back to 'blocked' (L2) when challenged — never bypasses.
 import type { Card, SourceAdapter, DiscoverContext } from '../types.js';
 import { fetchGuarded } from './http.js';
-import { stopSource } from '../ratelimit.js';
+import { mapPool, stopSource } from '../ratelimit.js';
 
 function decodeEntities(s: string): string {
   return s
@@ -88,30 +88,34 @@ function guestUrl(keywords: string, location: string, start: number, base: strin
 
 export function linkedinGuestAdapter(
   locations: string[],
-  opts: { baseUrl?: string } = {},
+  opts: { baseUrl?: string; width?: number } = {},
 ): SourceAdapter {
   const base = opts.baseUrl ?? 'https://www.linkedin.com';
+  const width = opts.width ?? 4;
   return {
     id: 'linkedin-guest',
     async discover(queries: string[], ctx: DiscoverContext): Promise<Card[]> {
-      const out: Card[] = [];
-      for (const q of queries) {
-        for (const loc of locations) {
-          if (ctx.stop.stopped) return out;
-          // Was `throw new Error(...)` on any non-gone failure, so a single 403
-          // or 429 aborted every remaining query and lost the whole source's
-          // output. Every other adapter continues; this one now does too, and
-          // the StopToken decides when the source is genuinely finished.
-          const res = await fetchGuarded(guestUrl(q, loc, 0, base), ctx.guard);
-          if (!res.ok) continue;
-          out.push(...parseGuestCards(res.text, `${q} — ${loc}`));
-          if (out.length >= ctx.cap) {
-            stopSource(ctx.stop, 'cap', `cap ${ctx.cap} reached`);
-            return out;
-          }
-        }
-      }
-      return out;
+      const pairs = queries.flatMap((q) => locations.map((loc) => ({ q, loc })));
+      let collected = 0;
+      // Pooled rather than serial: the limiter, not the loop, is the pacing
+      // knob, so overlapping the round-trips hides latency without raising the
+      // request rate. Results come back in input order — pushing into a shared
+      // array from parallel workers would make card order nondeterministic and
+      // every downstream diff noisy.
+      const perPair = await mapPool(pairs, width, async ({ q, loc }) => {
+        if (ctx.stop.stopped || collected >= ctx.cap) return [] as Card[];
+        // Was `throw new Error(...)` on any non-gone failure, so a single 403
+        // or 429 aborted every remaining query and lost the whole source's
+        // output. Every other adapter continues; this one now does too, and the
+        // StopToken decides when the source is genuinely finished.
+        const res = await fetchGuarded(guestUrl(q, loc, 0, base), ctx.guard);
+        if (!res.ok) return [] as Card[];
+        const cards = parseGuestCards(res.text, `${q} — ${loc}`);
+        collected += cards.length;
+        if (collected >= ctx.cap) stopSource(ctx.stop, 'cap', `cap ${ctx.cap} reached`);
+        return cards;
+      });
+      return perPair.flat().slice(0, ctx.cap);
     },
   };
 }

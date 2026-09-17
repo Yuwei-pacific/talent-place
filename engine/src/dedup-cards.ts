@@ -7,7 +7,12 @@ function normUrl(u: string): string {
   return u.trim().split('?')[0].replace(/\/+$/, '').toLowerCase();
 }
 
-/** Merge same-URL cards; keep the longest snippet, union discovery queries. */
+/** Merge same-POSTING cards; keep the longest snippet, union discovery queries.
+ *
+ * Merging used to discard every URL but the survivor's. `Roles.xlsx` has an
+ * `Alternate / Portal URLs` column that was declared unrecoverable for exactly
+ * that reason, so the mirrors are now carried on the card instead of dropped.
+ */
 export function dedupCards(cards: Card[]): { unique: Card[]; dupCount: number } {
   const byUrl = new Map<string, Card>();
   let dupCount = 0;
@@ -23,7 +28,11 @@ export function dedupCards(cards: Card[]): { unique: Card[]; dupCount: number } 
     const dq = prev.discoveryQuery.includes(c.discoveryQuery)
       ? prev.discoveryQuery
       : `${prev.discoveryQuery} + ${c.discoveryQuery}`;
-    byUrl.set(key, { ...prev, snippet, discoveryQuery: dq });
+    // Every URL seen for this posting except the survivor's, deduped.
+    const alternates = [...new Set([...(prev.alternateUrls ?? []), ...(c.alternateUrls ?? []), c.url])].filter(
+      (u) => normUrl(u) !== normUrl(prev.url),
+    );
+    byUrl.set(key, { ...prev, snippet, discoveryQuery: dq, alternateUrls: alternates });
   }
   return { unique: [...byUrl.values()], dupCount };
 }

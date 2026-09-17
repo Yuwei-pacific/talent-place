@@ -22,6 +22,9 @@ export interface Card {
   snippet: string;
   posted?: string;
   sourceJobId?: string;
+  /** Other URLs for the same posting, found by a different query or portal.
+   *  Carried rather than discarded so `Roles.xlsx` can show the mirrors. */
+  alternateUrls?: string[];
   source: JobSource;
   discoveryQuery: string;
 }

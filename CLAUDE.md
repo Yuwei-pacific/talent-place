@@ -82,6 +82,15 @@ npm run discover -- --config <run.json> --out <dir> [--history ../index/<Master>
 
 `run-report.json` records per-source `requests / ok / 429 / 403 / stop_kind / reason`. That is the A1 "declare the reason" duty as data rather than prose.
 
+It also writes `role-evidence.csv` — per-role `posted`, `alternate_urls`, `search_query`. A4's TSV is a fixed 22 columns and one row per **company**, so a run has nowhere to put those. Pass it to `stage` and they land in `Roles.xlsx`:
+
+```bash
+python3 python/sync_export.py stage --dir "<Master>" --history index/<Master>_Company_Index.csv \
+    --tsv outputs/output-YYYY-MM-DD.tsv --evidence <run dir>/role-evidence.csv
+```
+
+Without `--evidence` those columns stay empty and the manifest lists them under `columns_without_source`; with it, that list is empty. Freshness in particular — A1 requires `verificare l'attualità`, and before this the posted date was dropped between the card stage and the report.
+
 Before `src/cli.ts` existed, the adapters, `geoFilter`, `dedupCards`, `prefilter` and `observe` were all an uncalled library and the run loop lived in a throwaway script — so nothing about a run was reproducible. **If you find yourself writing a `/tmp` script to drive the adapters, that script belongs in `src/` instead.**
 
 ## The A1–A4 method

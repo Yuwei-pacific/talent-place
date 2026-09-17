@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node test/normalize-smoke.mjs && node test/multivalue-smoke.mjs && node test/prefilter-smoke.mjs && node test/labels-calibration.mjs && node test/geo-smoke.mjs && node test/history-smoke.mjs && node test/dedup-cards-smoke.mjs && node test/aggregators-smoke.mjs && node test/employer-smoke.mjs && node test/ratelimit-smoke.mjs && node test/http-guard-smoke.mjs && node test/linkedin-guest-smoke.mjs && node test/pipeline-smoke.mjs && python3 python/test_sync_export.py",
+    "test": "npm run build && node test/normalize-smoke.mjs && node test/multivalue-smoke.mjs && node test/prefilter-smoke.mjs && node test/labels-calibration.mjs && node test/geo-smoke.mjs && node test/history-smoke.mjs && node test/dedup-cards-smoke.mjs && node test/aggregators-smoke.mjs && node test/employer-smoke.mjs && node test/ratelimit-smoke.mjs && node test/http-guard-smoke.mjs && node test/linkedin-guest-smoke.mjs && node test/pipeline-smoke.mjs && node test/ratelimit-width-invariance.mjs && python3 python/test_sync_export.py",
     "discover": "node lib/cli.js discover"
   },
   "dependencies": {},

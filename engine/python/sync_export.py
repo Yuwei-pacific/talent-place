@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import synced_fs  # noqa: E402
 from reconcile import (  # noqa: E402
+    _ALT_SPLIT,
     MACHINE_LATEST_COLS,
     MACHINE_UNION_COLS,
     DATE_COLUMNS,
@@ -46,6 +47,7 @@ from reconcile import (  # noqa: E402
     propose_company_id,
     same_value,
     split_column,
+    split_multi,
 )
 
 # --------------------------------------------------------------------------
@@ -170,7 +172,55 @@ VALIDATION = {
 # Columns that exist per-role now but had NO home in the flat TSV, so no value
 # can be recovered for a historical run. They are present so that future runs
 # (once the search output carries them) do not lose them again.
-NOT_RECOVERABLE_FROM_FLAT_TSV = {"Alternate / Portal URLs", "Posted / Result Age", "Search Query"}
+# Columns a run cannot express through A4's fixed 22-column TSV. "Alternate /
+# Portal URLs" used to be listed here; it is not, because the TSV's own `alt.`
+# marker carries it and _role_values now reads it out.
+NOT_RECOVERABLE_FROM_FLAT_TSV = {"Posted / Result Age", "Search Query"}
+
+
+# --------------------------------------------------------------------------
+# Per-role evidence sidecar
+#
+# A4's TSV is a fixed 22 columns and one row per COMPANY, so a run has nowhere
+# to put a role's posting date, the query that found it, or its portal mirrors.
+# Rather than widen the human-owned A4 contract, a run may emit a sidecar keyed
+# by job URL and pass it here with --evidence. Without it those columns stay
+# empty -- which is how the freshness signal A1 asks for ("verify the
+# opportunity is current") got dropped between the card stage and the report.
+# --------------------------------------------------------------------------
+
+EVIDENCE_COLUMNS = ["url", "posted", "alternate_urls", "search_query"]
+
+
+def norm_role_url(url: str) -> str:
+    """Match the engine's normUrl: drop the query string and trailing slashes,
+    lowercase. A run's URL and the TSV's must land on the same key even when
+    one carries campaign parameters."""
+    return (url or "").strip().split("?")[0].rstrip("/").lower()
+
+
+def load_evidence(path: str | None) -> dict:
+    """Read a role-evidence sidecar into {normalised url: fields}."""
+    if not path:
+        return {}
+    text = Path(path).read_text(encoding="utf-8")
+    reader = csv.reader(io.StringIO(text), delimiter=";")
+    try:
+        header = next(reader)
+    except StopIteration:
+        return {}
+    missing = [c for c in EVIDENCE_COLUMNS if c not in header]
+    if missing:
+        raise StageError("evidence file %s is missing column(s): %s" % (path, ", ".join(missing)))
+    idx = {c: header.index(c) for c in EVIDENCE_COLUMNS}
+    out = {}
+    for row in reader:
+        if not row or not row[0].strip():
+            continue
+        key = norm_role_url(row[0])
+        if key:
+            out[key] = {c: (row[idx[c]].strip() if idx[c] < len(row) else "") for c in EVIDENCE_COLUMNS}
+    return out
 
 
 class StageError(Exception):
@@ -307,6 +357,26 @@ def parse_tsv(text: str) -> tuple[list[str], list[list[str]]]:
 # --------------------------------------------------------------------------
 
 
+# Job Links carries a per-role "alt." mirror on the SAME entry as its primary.
+# Expanded (the default for that column, so `split_column` callers see both
+# URLs), the mirror becomes a list item of its own, and any positional read of
+# the list then hands every role after it someone else's URL.
+_LINKS_NO_ALT = {"semicolon": False, "numbered": True}
+
+
+def _job_link_entries(cells: list[str]) -> list[str]:
+    """The per-role Job Links entries, with each `alt.` mirror still attached."""
+    return split_multi(cells[A4_COLUMNS.index("Job Links")], _LINKS_NO_ALT)
+
+
+def _split_alt(entry: str) -> tuple[str, list[str]]:
+    """(primary, alternates) for one role's Job Links entry."""
+    parts = [p.strip() for p in _ALT_SPLIT.split(entry) if p.strip()]
+    if not parts:
+        return "", []
+    return parts[0], parts[1:]
+
+
 def _role_values(cells: list[str], index: int, count: int) -> dict[str, str]:
     """Pick the index-th value of the columns that are per-role in the flat TSV.
 
@@ -314,6 +384,18 @@ def _role_values(cells: list[str], index: int, count: int) -> dict[str, str]:
     index (A4: "mantenendo lo stesso indice"). Where a shorter list cannot
     supply the index, fall back to the first entry rather than inventing a
     value — and never fabricate a URL.
+
+    Job Links is indexed WITHOUT expanding `alt.`, because the index addresses
+    a ROLE. With the expansion on, a company whose first role has a mirror
+    pushes every later role onto the wrong URL — the second role gets the
+    first's mirror and so on. Verified against the pre-fix code:
+
+        role 1 "Global CRM Internship"  -> job/20457            (right)
+        role 2 "Market Insights Intern" -> 4467208467, role 1's mirror  (wrong)
+        role 3 "Business Planning"      -> job/21152,  role 2's employer URL (wrong)
+
+    Colleagues open `Roles.xlsx` to reach one specific posting, so a wrong URL
+    there sends them to the wrong job.
     """
     def at(column: str) -> list[str]:
         return split_column(cells[A4_COLUMNS.index(column)], column)
@@ -324,15 +406,30 @@ def _role_values(cells: list[str], index: int, count: int) -> dict[str, str]:
             return ""
         return items[index] if index < len(items) else (items[0] if count else "")
 
+    entries = _job_link_entries(cells)
+    if not entries:
+        primary, alternates = "", []
+    else:
+        entry = entries[index] if index < len(entries) else (entries[0] if count else "")
+        primary, alternates = _split_alt(entry)
+
     return {
         "Job Title": pick("Matching Job Titles"),
         "Location": pick("Locations"),
-        "Primary Job URL": pick("Job Links"),
+        "Primary Job URL": primary,
+        "Alternate / Portal URLs": "; ".join(alternates),
     }
 
 
-def explode_roles(rows: list[list[str]]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Return (role_rows, company_rows)."""
+def explode_roles(
+    rows: list[list[str]], evidence: dict | None = None
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return (role_rows, company_rows).
+
+    `evidence` is a run's per-role sidecar keyed by normalised job URL. Columns
+    it cannot supply stay empty rather than being guessed at.
+    """
+    evidence = evidence or {}
     role_rows: list[dict[str, str]] = []
     company_rows: list[dict[str, str]] = []
 
@@ -350,6 +447,7 @@ def explode_roles(rows: list[list[str]]) -> tuple[list[dict[str, str]], list[dic
 
         for i in range(count):
             rv = _role_values(cells, i, count)
+            ev = evidence.get(norm_role_url(rv["Primary Job URL"]), {})
             role_rows.append(
                 {
                     "Company / Outreach Account": company,
@@ -359,15 +457,16 @@ def explode_roles(rows: list[list[str]]) -> tuple[list[dict[str, str]], list[dic
                     "In Italy?": col("In Italy?"),
                     "Why It Fits": col("Master-fit Themes"),
                     "Primary Job URL": rv["Primary Job URL"],
-                    # Present but necessarily empty for a historical run.
-                    "Alternate / Portal URLs": "",
+                    # Recovered from the TSV's own `alt.` marker, so this is no
+                    # longer one of the columns a live run cannot supply.
+                    "Alternate / Portal URLs": ev.get("alternate_urls") or rv["Alternate / Portal URLs"],
                     "Source / Portal": col("Sources / Portals"),
                     "Work Mode": col("Work Modes"),
                     "Curricular Status": col("Curricular Evidence"),
                     "Previously Contacted?": col("Previously Contacted?"),
                     "Verification Status": col("Verification Status"),
-                    "Posted / Result Age": "",
-                    "Search Query": "",
+                    "Posted / Result Age": ev.get("posted", ""),
+                    "Search Query": ev.get("search_query", ""),
                     "Date Checked": col("Last Checked"),
                 }
             )
@@ -542,7 +641,8 @@ def cmd_stage(args: argparse.Namespace) -> int:
 
     text = read_tsv_source(args.tsv)
     header, rows = parse_tsv(text)
-    role_rows, company_rows = explode_roles(rows)
+    evidence = load_evidence(args.evidence)
+    role_rows, company_rows = explode_roles(rows, evidence)
 
     # Human-owned columns are copied in read-only from canonical history so
     # colleagues see one joined view without the machine touching their file.
@@ -587,7 +687,8 @@ def cmd_stage(args: argparse.Namespace) -> int:
         "roles_out": len(role_rows),
         "companies_out": len(company_rows),
         "role_columns": len(ROLE_COLUMNS),
-        "columns_without_source": sorted(NOT_RECOVERABLE_FROM_FLAT_TSV),
+        "columns_without_source": [] if getattr(args, "evidence", None) else sorted(NOT_RECOVERABLE_FROM_FLAT_TSV),
+        "evidence": getattr(args, "evidence", None),
         "target": str(roles_xlsx),
         "never_touched": str(d / "Review.xlsx"),
     }
@@ -1481,6 +1582,11 @@ def main() -> int:
     p.add_argument("--dir", required=True)
     p.add_argument("--history", required=True)
     p.add_argument("--tsv", help="path to the A4 TSV; omit to read stdin")
+    p.add_argument(
+        "--evidence",
+        help="per-role sidecar (url;posted;alternate_urls;search_query) supplying the columns"
+        " A4's 22-column TSV cannot carry",
+    )
     p.add_argument("--run-id")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--allow-hydrate", action="store_true")
