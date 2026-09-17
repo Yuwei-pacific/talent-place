@@ -12,7 +12,7 @@ COMPANY_HEADERS = [
     "Brands / Business Units",
     "In Italy?",
     "Locations",
-    "Strategic-fit Themes",
+    "Master-fit Themes",
     "Matching Job Titles",
     "Job Links",
     "Role Count",
@@ -497,7 +497,7 @@ def cmd_add_workbook(path: Path) -> None:
             *[str(role.get("Location") or "") for role in new_roles],
         )
         themes = _merge_semi(
-            _cell(company_ws, row_index, "Strategic-fit Themes"),
+            _cell(company_ws, row_index, "Master-fit Themes"),
             "; ".join(meta.get("themes") or []) if isinstance(meta.get("themes"), list) else str(meta.get("themes") or ""),
             *[str(role.get("Why It Fits") or "") for role in new_roles],
         )
@@ -518,7 +518,7 @@ def cmd_add_workbook(path: Path) -> None:
             or str(meta.get("brand") or company_name),
             "In Italy?": _italy_flag(locations, _cell(company_ws, row_index, "In Italy?")),
             "Locations": locations,
-            "Strategic-fit Themes": themes,
+            "Master-fit Themes": themes,
             "Matching Job Titles": _format_numbered(titles),
             "Job Links": _format_numbered(links),
             "Role Count": len(_parse_numbered(_format_numbered(links))),

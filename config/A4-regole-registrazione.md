@@ -56,7 +56,7 @@ Il TSV è una proposta da revisionare: un blocco di codice di testo, Tab reali f
 Colonne esatte, nell’ordine del CSV canonico. Le prime 20 sono obbligatorie; le colonne 21–22 (`First Contact Date`, `Recall`) sono estensioni di produzione: l’AI non le compila per i nuovi ruoli (restano vuote), ma deve conservarle quando aggiorna una riga esistente che già le contiene:
 
 ```text
-Company / Outreach Account	Brands / Business Units	In Italy?	Locations	Strategic-fit Themes	Matching Job Titles	Job Links	Role Count	Curricular Evidence	Work Modes	Sources / Portals	Previously Contacted?	Contact Search Status	Contact Name	Contact Role	Contact Email / LinkedIn	Outreach Decision	Notes	Verification Status	Last Checked	First Contact Date	Recall
+Company / Outreach Account	Brands / Business Units	In Italy?	Locations	Master-fit Themes	Matching Job Titles	Job Links	Role Count	Curricular Evidence	Work Modes	Sources / Portals	Previously Contacted?	Contact Search Status	Contact Name	Contact Role	Contact Email / LinkedIn	Outreach Decision	Notes	Verification Status	Last Checked	First Contact Date	Recall
 ```
 
 `In Italy?`: Yes per sedi dei ruoli inclusi tutte italiane, No se tutte fuori Italia, Mixed se entrambe. È una convenzione del report sui ruoli elencati, non un’affermazione su tutte le sedi aziendali. Se la sede non consente la classificazione, tenere il candidato fra i non risolti senza inventare un valore. `Role Count`: numero dei ruoli unici nella riga. `Last Checked`: YYYY-MM-DD.
