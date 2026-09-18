@@ -1,11 +1,25 @@
 # A4 · Proposta di modifica: vocabolario di stato
 
-**Stato: PROPOSTA — non applicata.** `A4-regole-registrazione.md` è un file di proprietà
-umana e non è stato modificato. Questo documento propone le modifiche; dopo
-l'approvazione, le regole qui sotto vanno recepite in A4.
+**Stato: CHIUSA — esito misto. Non è più una proposta da approvare.** Il testo qui
+sotto è conservato come traccia del ragionamento, non come lavoro da fare.
 
 Data: 2026-09-16 · Contesto: passaggio dalla review manuale su Excel al file
-`Review.xlsx` condiviso.
+`Review.xlsx` condiviso. · Esito registrato il 2026-09-18.
+
+## Esito
+
+| Parte | Esito |
+|---|---|
+| **Modifica 1** — `Outreach Decision` da costante a enumerazione | **Recepita.** Era già la realtà: `Review` / `Yes` / `No` esiste in codice dalle prime versioni, e A4 lo prescriveva già. Nessuna modifica necessaria. |
+| **Modifica 2** — stato *derivato*, calcolato da Excel, non memorizzato | **Superata, non recepita.** La revisione ha scelto l'opposto: uno stato **memorizzato** in `Contact Search Status`, con cinque valori scelti dalla persona, e l'intera riga colorata da quello. La proposta argomentava che un campo di stato manuale sarebbe "un terzo campo da mantenere"; la scelta è stata di accettarlo, perché il colore derivato non distingue «non ho ancora cercato il referente» da «il ruolo non è adatto». |
+| **Conseguenze tecniche, punto 1** — `Notes` diviso in due colonne | **Recepita.** `Matching Notes` (macchina) e `Reviewer Notes` (persona) esistono in `Review.xlsx` da `init-review`. |
+
+Il vocabolario effettivo è ora in `A4-regole-registrazione.md`, sezione «Contatti e
+decisioni»: `Not started`, `Job not suitable`, `Potential contact`, `Contact found`,
+`Job found`. Le regole di colore in codice citavano questo file (`COLOR_RULES_SPEC`); ora citano
+A4. Il riferimento a un documento chiuso non proteggeva niente — quella stringa viene
+solo stampata, non scritta nel foglio — ed era solo un modo per rimandare a una
+proposta respinta.
 
 ---
 

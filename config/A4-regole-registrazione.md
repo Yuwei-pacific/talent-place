@@ -14,9 +14,19 @@ Raggruppare per azienda/unità di contatto. Mantenere brand e business unit; non
 
 ## Contatti e decisioni
 
-Essere presenti nel Company Index non significa essere già stati contattati. `Previously Contacted?` va ricavato da prove storiche esplicite. Assenza di storico o valori contraddittori: `To verify`, con nota sul conflitto. Se due campi dello stesso account si contraddicono (es. `Previously Contacted? = No` e `Contact Search Status = Contacted`), non scegliere un lato: verificare prima dell’outreach.
+Essere presenti nel Company Index non significa essere già stati contattati. `Previously Contacted?` va ricavato da prove storiche esplicite. Assenza di storico o valori contraddittori: `To verify`, con nota sul conflitto. Se due campi dello stesso account si contraddicono (es. `Previously Contacted? = No` e `Contact Search Status = Contact found`), non scegliere un lato: verificare prima dell’outreach.
 
 Non sovrascrivere contatti e stati già presenti con i default. Per nuove aziende senza ricerca contatti: `Contact Search Status = Not started`; nome, ruolo ed email/LinkedIn vuoti. Inserire solo referenti supportati da fonti pubbliche affidabili; nessuna email dedotta. L’utente conferma il referente prima dell’outreach.
+
+`Contact Search Status` è una **lista chiusa di cinque valori**. La macchina scrive `Not started` su ogni riga nuova; gli altri li imposta la persona in revisione, e ciascuno descrive un momento diverso del rapporto con l’azienda:
+
+- `Not started` — la ricerca del referente non è ancora iniziata.
+- `Job not suitable` — il ruolo non è adatto: la riga resta come traccia, non si contatta nessuno.
+- `Potential contact` — il ruolo è adatto, il referente non è ancora identificato.
+- `Contact found` — il referente è identificato e verificato.
+- `Job found` — il referente ha confermato che la posizione esiste ed è aperta.
+
+Un valore fuori da questo elenco fa **rifiutare l’intera riga** da `stage`. La lista è chiusa di proposito: è l’asse su cui `Review.xlsx` colora l’intera riga (bianco / grigio / giallo / blu / verde, nell’ordine sopra), e un valore improvvisato renderebbe il colore privo di significato. I valori storici `Contacted` e `No suitable contact` restano nel CSV canonico come traccia di ciò che è già stato fatto; non vanno usati in output nuovi, e `migrate-review` li converte quando una cartella viene aggiornata.
 
 Le proposte entrano nel bacino da valutare, con `Outreach Decision = Review`, anche se il matching è alto. Nessuna scrittura nel CSV di riferimento. Excel viene aggiornato solo sui record confermati, conservando storico e decisioni. L’AI prepara la mail dopo selezione; la persona rivede e invia. Non inviare automaticamente.
 

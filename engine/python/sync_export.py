@@ -944,7 +944,10 @@ def _write_csv_rows(path: Path, header: list[str], rows: list[list[str]]) -> Non
         w.writerows(rows)
 
 
-COLOR_RULES_SPEC = "A4-status-vocabulary v1 (see config/A4-status-vocabulary.proposed.md)"
+# Named for what it now is. The string is only ever printed as JSON -- it is not
+# stored in the workbook -- so pointing it at the closed proposal file was
+# misinformation with no upside.
+COLOR_RULES_SPEC = "A4 · Contatti e decisioni (Contact Search Status, 5 valori) — colore per riga"
 
 # Range padding: rules must still apply to rows a colleague inserts later.
 CF_RANGE_ROWS = 2000

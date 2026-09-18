@@ -179,13 +179,10 @@ Nessuno di questi viene risolto automaticamente: servono i dati storici.
   successiva o testo di intestazione. Segnalate da `doctor` e da `init-review`.
 - **`Moncler Group`** (da un giro) contro **`Moncler`** (canonical): stessa
   azienda? Si decide in `index/company-aliases.csv`, non con una euristica.
-- **`A4-status-vocabulary.proposed.md` è una proposta, non una regola.** Ma
-  `sync_export.py` la cita come autorità delle regole di colore
-  (`COLOR_RULES_SPEC`). O si recepisce la proposta in A4, o il codice non deve
-  dichiararsi vincolato a un documento non approvato. Decisione umana.
-- **Il vocabolario di `Contact Search Status` è cambiato in codice ma A4 porta
-  ancora i tre valori vecchi.** Finché i due non coincidono, `stage` rifiuta
-  ogni riga: è una modifica che va fatta e disfatta insieme.
+- *(risolto il 2026-09-18)* `A4-status-vocabulary.proposed.md` è **chiusa**: la
+  Modifica 1 era già in vigore, la Modifica 2 (stato derivato) è stata superata
+  dalla scelta di uno stato memorizzato. Il vocabolario sta ora in A4, e il file
+  conserva l'esito in testa.
 
 ## Test
 

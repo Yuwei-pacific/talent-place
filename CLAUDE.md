@@ -160,6 +160,7 @@ These are A1/A4 rules expressed as code. Changing one means changing a rule, so 
 - **Never bypass login/CAPTCHA/rate limits.** `discovery/http.ts` classifies those as `blocked` and the ladder moves to another source. `BLOCKED_MARKERS` is deliberately narrow — `captcha` and `enable javascript to` appear on *legitimate* Ashby/Workday pages, so widening the list silently kills the whole employer branch.
 - **Indeed accounting invariant:** `X = Y + Z + P` (unique found / included / excluded-or-duplicate / unresolved-outside-TSV), rendered by `observe.ts::indeedLine`.
 - **Employer page beats portal page** for verification status (A1). A generic Careers page is never proof a specific role exists and is not a dedup key.
+- **`Contact Search Status` is a closed set of five**, and it is the axis `Review.xlsx` colours the whole row by. `stage` refuses the entire run on a value outside it, so `CONTACT_STATUS_VALUES` and A4 must move together — that is not a stylistic preference, it is a hard failure. Superseded values go in `LEGACY_CONTACT_STATUS` so `migrate-review` can carry a live sheet across rather than a human retyping it.
 
 ## Pipeline order (in the engine)
 
@@ -190,7 +191,7 @@ Discovery adapters live in `src/discovery/`, each returning `Card[]` behind the 
 | The review columns colleagues see | `sync_export.py` → `REVIEW_COLUMNS`, **then `migrate-review`** — `stage`/`append` write by POSITION from that list, so a change without a migration puts every later value in the wrong column. `migrate-review` carries cells by column name and takes its own backup. |
 | The colleague-facing status vocabulary | `CONTACT_STATUS_VALUES` in `sync_export.py` **and** A4 — `stage` refuses every row until the two agree. Old values go in `LEGACY_CONTACT_STATUS` so `migrate-review` can carry a live sheet across. |
 | The status colours | `sync_export.py` → `_install_color_rules`, then re-run `color` (idempotent) |
-| The status vocabulary itself | `config/A4-status-vocabulary.proposed.md` is a **proposal**; A4 is human-owned and unamended. Note the inconsistency: `sync_export.py` already cites it as the authority for the live colour rules. |
+| The status vocabulary itself | `config/A4-regole-registrazione.md`, sezione «Contatti e decisioni». `A4-status-vocabulary.proposed.md` is **closed** — its Modifica 1 was already in force, its Modifica 2 (a status *derived* in Excel) was superseded by the stored 5-value vocabulary. The `COLOR_RULES_SPEC` string still names that file; the authority is A4. |
 
 Do not add a new config file per search run (A4) and do not create a second copy of A2/A3 content elsewhere.
 
