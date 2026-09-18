@@ -94,7 +94,7 @@ Non si incolla più niente in SharePoint: `sync_export.py` scrive direttamente n
    ```
    python3 engine/python/sync_export.py doctor --dir "<percorso locale>"
    ```
-3. `init-review` crea `Review.xlsx` (una volta; poi rifiuta di sovrascrivere), `color` installa le regole di colore, `backfill-ids` aggiunge `Company ID`.
+3. `init-review` crea `Review.xlsx` (una volta; poi rifiuta di sovrascrivere) e `color` installa le regole di colore. `migrate-review` serve solo quando cambiano le **colonne**. `export-history` è di sola lettura e gira prima di ogni ricerca.
 
 **Se cambiano le colonne di `Review.xlsx`** (non i valori: le colonne), serve una migrazione, perché `stage` e `append` scrivono nella posizione dettata da `REVIEW_COLUMNS`: senza migrazione ogni valore dopo la modifica finisce nella colonna sbagliata.
 

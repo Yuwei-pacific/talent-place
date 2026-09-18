@@ -299,7 +299,7 @@ class Canonical:
     by_norm_name: dict[str, list[CanonicalRow]] = field(default_factory=dict)
     # Companies whose stored id is shared by more than one row. The canonical CSV
     # has 5 such names (JAKALA, KPMG, NTT DATA, PwC, TeamViewer) whose two rows
-    # were given the same proposed id by backfill-ids. Collapsing them to one row
+    # were given the same proposed id when the column was added. Collapsing them to one row
     # would silently route every update to the first row and leave the second
     # permanently unreachable -- the same failure as add_verified.py's
     # last-row-wins, just via a different key.

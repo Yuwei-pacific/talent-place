@@ -39,7 +39,7 @@ append         add genuinely-new companies to Review.xlsx
 harvest        report what colleagues decided        (read-only audit)
 ```
 
-`init-review` (create `Review.xlsx`), `color` (install the status rules) and `backfill-ids` (add the `Company ID` column) are one-time setup.
+`init-review` (create `Review.xlsx`), `color` (install the status rules) and `migrate-review` (rebuild a workbook onto a changed `REVIEW_COLUMNS`) are one-time or as-needed. `export-history` is read-only and runs before every search.
 
 ### Why `append` is safe
 
@@ -156,7 +156,7 @@ These are A1/A4 rules expressed as code. Changing one means changing a rule, so 
 
 - **No label or score without a read description.** `labels.ts::decisionToA1` returns `non_risolto` when no reliable description exists, even if a score was passed. Score 0–100 is optional and only ever orders results; the qualitative label (`pertinente` / `adiacente` / `fuori profilo`) is what carries meaning.
 - **Only `pertinente` and `adiacente` reach the main TSV.** `fuori profilo` goes to exclusions; unreliable ones go to unresolved.
-- **`Review.xlsx` is the record; nothing is synced into a second one.** Until 2026-09-18 a canonical CSV sat beside it and three commands wrote into it (`add_verified.py`, `pull`, `backfill-ids`). `pull` and `add_verified.py` are gone: their whole job was to carry colleagues' decisions from Review into the canonical, which is redundant when Review *is* the record. The canonical was archived the same day after it was measured 62 companies stale. `backfill-ids` survives but has no canonical to point at — see the open question in its section below.
+- **`Review.xlsx` is the record; nothing is synced into a second one.** Until 2026-09-18 a canonical CSV sat beside it and three commands wrote into it. All three are gone now, along with the CSV: `pull` and `add_verified.py` carried colleagues' decisions into it, and `backfill-ids` maintained its `Company ID` column — every one of them redundant once Review *is* the record. The canonical was archived the same day, after it was measured 62 companies stale. `propose_company_id` stays, because `append` calls it to give a new company an identity.
 - **Column ownership is data, not a comment.** `reconcile.py` declares `HUMAN_COLS`, `MACHINE_UNION_COLS`, `MACHINE_LATEST_COLS`. A column cannot be in two sets, and tests assert that.
 - **The Python and TypeScript implementations must agree.** `reconcile.py` and `normalize.ts` both read the canonical CSV, so `MULTI_VALUE_SPEC` and `norm_company` are asserted equal across the two languages in `test_sync_export.py`. Two readers disagreeing about one file was a real bug.
 - **Column identity vs. date-ness are different axes.** `DATE_COLUMNS` spans both owners — `Last Checked` is machine-owned while `First Contact Date`/`Recall` are human-owned. Blanking every date column when appending silently drops the run date.
