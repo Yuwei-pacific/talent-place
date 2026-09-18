@@ -1192,6 +1192,67 @@ def cmd_init_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export_history(args: argparse.Namespace) -> int:
+    """Write Review.xlsx out as a semicolon CSV the search run can read.
+
+    Why this exists: `Review.xlsx` is the company record that is actually
+    maintained — it has the companies colleagues have decided about, and on
+    2026-09-18 it held 180 against the canonical CSV's 118, because nothing had
+    run `pull` for weeks. The search run must dedup against what is current, and
+    the TypeScript CLI cannot read xlsx (the engine has no dependencies). So the
+    Python side, which already knows how to read the workbook, converts it.
+
+    This is the same `_review_as_canonical` the `append` guard uses, so there is
+    one answer to "which companies do we know" rather than two that drift.
+
+    Columns the workbook does not render come out empty rather than invented:
+    `Previously Contacted?` and `Outreach Decision` are not in Review.xlsx.
+    """
+    d = Path(args.dir)
+    target = d / "Review.xlsx"
+    if not target.exists():
+        print(json.dumps({"ok": False, "error": f"{target} does not exist"}, ensure_ascii=False))
+        return 2
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(target, rich_data=True, read_only=True) if False else load_workbook(target, read_only=True)
+    ws = wb["Review"] if "Review" in wb.sheetnames else wb.active
+    canon = _review_as_canonical(ws)
+
+    header = A4_COLUMNS + ["Company ID"]
+    rows: list[list[str]] = []
+    for cr in canon.rows:
+        out: list[str] = []
+        for col in A4_COLUMNS:
+            # Review splits A4's single `Notes` into machine and human halves.
+            source = "Matching Notes" if col == "Notes" else col
+            out.append(cr.get(source))
+        out.append(cr.get("Company ID"))
+        rows.append(out)
+
+    dest = Path(args.out) if args.out else d / "_machine" / "review-history.csv"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _write_csv_rows(dest, header, rows)
+
+    with_roles = sum(1 for r in rows if r[A4_COLUMNS.index("Matching Job Titles")].strip())
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "source": str(target),
+                "out": str(dest),
+                "companies": len(rows),
+                "with_roles": with_roles,
+                "note": "feed this to `discover --history` so the run dedups against what colleagues maintain",
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
 def cmd_migrate_review(args: argparse.Namespace) -> int:
     """Rebuild Review.xlsx onto the current REVIEW_COLUMNS.
 
@@ -1842,6 +1903,12 @@ def main() -> int:
         ("harvest", cmd_harvest, "report what colleagues decided (read-only)", True),
         ("pull", cmd_pull, "write colleagues' decisions back into the canonical CSV", True),
         (
+            "export-history",
+            cmd_export_history,
+            "write Review.xlsx as a CSV the search run can dedup against",
+            False,
+        ),
+        (
             "migrate-review",
             cmd_migrate_review,
             "rebuild Review.xlsx onto the current REVIEW_COLUMNS, carrying every cell by column name",
@@ -1859,6 +1926,8 @@ def main() -> int:
             q.add_argument("--force", action="store_true", help="overwrite an existing Review.xlsx")
         if name == "append":
             q.add_argument("--run-id", help="defaults to the latest run in _machine/last-run.json")
+        if name == "export-history":
+            q.add_argument("--out", help="where to write the CSV (default: <dir>/_machine/review-history.csv)")
         if name == "migrate-review":
             q.add_argument("--from", dest="source", help="read the old sheet from here instead (e.g. a backup)")
             q.add_argument("--force", action="store_true", help="migrate even if some status values are unmapped")

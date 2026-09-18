@@ -6,11 +6,13 @@ academic_year: 2027-28
 status: incomplete
 updated_on: "2026-09-10"
 
-# Storico Company Index di questo Master. Canonical: talent-place/index/Accessory_Design_Company_Index.csv.
+# Storico di questo Master: `Review.xlsx` nella sua cartella di pubblicazione,
+# ancora vuoto (solo intestazione) finche' non si fa il primo giro. Il giro lo legge
+# convertendolo:  sync_export.py export-history --dir "<cartella>" --out <csv>
 # Nuovo Master: nessuno storico precedente; il CSV nasce vuoto (solo header).
 # Le colonne First Contact Date (col 21) e Recall (col 22) vivono nel CSV, non nel
 # Previous Contact List. Company ID (col 23): vedi A3 di Strategic Design ED.28.
-history_file: ../../index/Accessory_Design_Company_Index.csv
+history_file: "../../../jobSearch_outPut/Accessory design ED.14/Review.xlsx"
 previous_reports: []
 previous_contact_list: null
 

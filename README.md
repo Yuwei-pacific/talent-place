@@ -14,10 +14,15 @@ talent-place/
 │   ├── A4-regole-registrazione.md         # comune a tutti i Master
 │   ├── Strategic design ED.28/
 │   │   ├── A2-profilo-strategic-design.md # uno per Master
-│   │   └── A3-cohort.yaml                 # uno per edizione (history_file -> ../../index/..csv)
+│   │   └── A3-cohort.yaml                 # uno per edizione (history_file -> il Review.xlsx del Master)
 │   └── Accessory design ED.14/            # stesso schema
-├── archive/                     # documenti chiusi/ritirati (non input dell'agent)
-│   └── 2026-09-16-status-vocabulary-proposal.md  # chiusa: esito in testa, testo come traccia
+├── archive/                     # chiusi/ritirati: niente qui è un input dell'agent
+│   ├── 2026-09-16-status-vocabulary-proposal.md
+│   ├── Strategic_Design_Company_Index.csv   # vecchio canonical, fermo a 118 aziende
+│   ├── Accessory_Design_Company_Index.csv
+│   ├── company-aliases.csv                  # stava dove nessuno lo leggeva
+│   ├── duplicate-names-report.csv
+│   └── run-2026-09-17-strategic-design-ED28.tsv
 ├── engine/                      # job-engine
 │   ├── src/
 │   │   ├── cli.ts               # `discover` (ricerca) e `verify` (sito datore)
@@ -33,12 +38,6 @@ talent-place/
 │   │   ├── synced_fs.py         # guardie di scrittura sul mount OneDrive
 │   │   └── add_verified.py      # righe confermate -> CSV canonico
 │   └── package.json (npm test)
-├── outputs/                     # output-YYYY-MM-DD.tsv per ogni ricerca (solo questo)
-└── index/
-    ├── Strategic_Design_Company_Index.csv   # canonical history
-    ├── Accessory_Design_Company_Index.csv   # canonical history (nuovo Master)
-    ├── company-aliases.csv                  # alias mantenuti a mano (opzionale)
-    └── duplicate-names-report.csv           # problemi da risolvere a mano
 ```
 
 ## Il metodo: cinque file, quattro input per l'agent
@@ -108,11 +107,18 @@ Ogni cella viene trasferita **per nome di colonna**, quindi una colonna spostata
 
 **Ogni settimana**
 
-1. **La ricerca.** Il giro è guidato da Claude Code, che legge A1–A4 e il Master. La parte meccanica è in `engine/`:
+1. **La ricerca.** Il giro è guidato da Claude Code, che legge A1–A4 e il Master. La parte meccanica è in `engine/`.
+
+   Prima si esporta lo storico **dal file che i colleghi mantengono**, non da una copia:
+   ```
+   python3 engine/python/sync_export.py export-history \
+       --dir "<cartella del Master>" --out <cartella del giro>/history.csv
+   ```
+   Poi la ricerca, che usa quel CSV per la deduplicazione:
    ```
    cd engine
    npm run discover -- --config <run.json> --out <cartella del giro> \
-       --history ../index/<Master>_Company_Index.csv
+       --history <cartella del giro>/history.csv
    ```
    Scrive `cards.json` (i ruoli da leggere), `role-evidence.csv` (data di pubblicazione, query, link alternativi) e `run-report.json` (cosa ha fatto ogni fonte e perché si è fermata).
 
@@ -124,12 +130,12 @@ Ogni cella viene trasferita **per nome di colonna**, quindi una colonna spostata
    ```
    Un URL per riga, opzionalmente `etichetta;url`. Risponde a "la pagina è viva / parla di uno stage / c'è un percorso di candidatura" e scrive uno stato A4 per URL. Nel giro del 17/09 ha risposto per 9 pagine su 9 in 10,9 secondi, contro ~72 secondi a pagina col browser: **il browser è l'eccezione**, per i pochi URL che la sonda non risolve.
 
-3. **Pubblicare il giro.** Salvare il TSV in `outputs/output-YYYY-MM-DD.tsv` (più Master nello stesso giorno: aggiungere il `master_id`), poi:
+3. **Pubblicare il giro.** Salvare il TSV nella cartella del giro, accanto a `cards.json` ed `evidence` (A4: la cartella di output la indica la richiesta). Poi:
    ```
    python3 engine/python/sync_export.py doctor --dir "<percorso>"
    python3 engine/python/sync_export.py stage  --dir "<percorso>" \
-       --history index/Strategic_Design_Company_Index.csv \
-       --tsv outputs/output-YYYY-MM-DD.tsv \
+       --history <cartella del giro>/history.csv \
+       --tsv <cartella del giro>/run.tsv \
        --evidence <cartella del giro>
    python3 engine/python/sync_export.py append --dir "<percorso>"
    ```
@@ -140,9 +146,9 @@ Ogni cella viene trasferita **per nome di colonna**, quindi una colonna spostata
 5. Riportare le decisioni nel canonical:
    ```
    python3 engine/python/sync_export.py harvest --dir "<percorso>" \
-       --history index/Strategic_Design_Company_Index.csv
+       --history <cartella del giro>/history.csv
    python3 engine/python/sync_export.py pull    --dir "<percorso>" \
-       --history index/Strategic_Design_Company_Index.csv --report /tmp/conflitti.csv
+       --history <cartella del giro>/history.csv --report /tmp/conflitti.csv
    ```
 
 **Due file, due proprietari.** `Review.xlsx` è dei colleghi: la macchina ci aggiunge solo righe nuove in fondo, dietro guardie, e non lo rigenera mai. `Roles.xlsx` è della macchina: si rigenera ogni giro e contiene una riga per ruolo. Nessuno deve unire niente a mano.
@@ -178,12 +184,12 @@ Nessuno di questi viene risolto automaticamente: servono i dati storici.
 - **5 nomi su due righe ciascuno** (`JAKALA`, `KPMG`, `NTT DATA`, `PwC`,
   `TeamViewer`), più **una riga orfana** (indice 82: solo
   `First Contact Date = 03/09/2026`, senza azienda, fra `Logotel` e `Doctolib`).
-  Dettagli in `index/duplicate-names-report.csv`.
+  Dettagli in `archive/duplicate-names-report.csv`.
 - **Due righe corrotte da un incolla** (`Bain & Company`, `Moncler`): le colonne
   `Verification Status` e `Last Checked` contengono i valori della riga
   successiva o testo di intestazione. Segnalate da `doctor` e da `init-review`.
 - **`Moncler Group`** (da un giro) contro **`Moncler`** (canonical): stessa
-  azienda? Si decide in `index/company-aliases.csv`, non con una euristica.
+  azienda? Si decide in `company-aliases.csv` nella radice di `jobSearch_outPut/` (dove il codice lo cerca), non con una euristica.
 - *(risolto il 2026-09-18)* La proposta sul vocabolario è **chiusa** e spostata in
   `archive/2026-09-16-status-vocabulary-proposal.md`: la Modifica 1 era già in
   vigore, la Modifica 2 (stato derivato) è stata superata dalla scelta di uno

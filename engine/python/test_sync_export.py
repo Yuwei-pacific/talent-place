@@ -56,7 +56,7 @@ from reconcile import (  # noqa: E402
 )
 
 REPO = HERE.parent.parent
-CANONICAL = REPO / "index" / "Strategic_Design_Company_Index.csv"
+CANONICAL = HERE.parent / "test" / "fixtures" / "strategic-design-history.csv"
 # Sample TSVs live with the other test data, not in outputs/: they are FIXTURES,
 # and a fixture filed under a directory called "outputs" reads as discardable.
 # Measured: deleting them turns 6 tests into skips while the suite still says OK.
@@ -1372,6 +1372,101 @@ class TestHarvestAndPull(TmpDirCase):
         self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Contact Search Status": "Job found"})])
         self.run_("pull", canon)
         self.assertTrue(list((self.tmp / "_backups").glob("canon-*.csv")))
+
+
+class TestExportHistory(TmpDirCase):
+    """`export-history` turns Review.xlsx into the CSV the search run dedups against.
+
+    Why the run reads this and not a canonical CSV: measured on 2026-09-18, the
+    canonical had gone 62 companies stale (118 against Review's 180) because
+    nothing had run `pull` for weeks. Deduping a run against it re-proposed 76
+    roles that had just been published. Review.xlsx is the file colleagues
+    actually maintain, so it is the one that answers "do we know this already".
+    """
+
+    def build_review(self):
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Review"
+        ws.cell(1, 1, "banner")
+        for c, name in enumerate(REVIEW_COLUMNS, start=1):
+            ws.cell(2, c, name)
+        row = {c: "" for c in REVIEW_COLUMNS}
+        row["Company / Outreach Account"] = "Alpha Srl"
+        row["Matching Job Titles"] = "1. Service Design Intern — Milan, Italy"
+        row["Job Links"] = "1. https://alpha.example/1"
+        row["Locations"] = "Milan, Italy"
+        row["Matching Notes"] = "[NEW COMPANY] machine prose"
+        row["Reviewer Notes"] = "a colleague's note"
+        row["Company ID"] = "polids-aaaaaaaa"
+        row["Contact Search Status"] = "Contact found"
+        for c, name in enumerate(REVIEW_COLUMNS, start=1):
+            ws.cell(3, c, row[name] or None)
+        wb.save(self.tmp / "Review.xlsx")
+
+    def export(self, *extra):
+        return subprocess.run(
+            [sys.executable, str(HERE / "sync_export.py"), "export-history", "--dir", str(self.tmp), *extra],
+            capture_output=True,
+            text=True,
+        )
+
+    def test_writes_a_csv_the_run_can_read(self):
+        self.build_review()
+        out = self.tmp / "h.csv"
+        proc = self.export("--out", str(out))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        meta = json.loads(proc.stdout)
+        self.assertEqual(meta["companies"], 1)
+        self.assertEqual(meta["with_roles"], 1)
+
+        rows = list(csv.reader(io.StringIO(out.read_text(encoding="utf-8")), delimiter=";"))
+        self.assertEqual(rows[0], A4_COLUMNS + ["Company ID"], "the header the reader expects")
+        rec = dict(zip(rows[0], rows[1]))
+        self.assertEqual(rec["Company / Outreach Account"], "Alpha Srl")
+        self.assertEqual(rec["Matching Job Titles"], "1. Service Design Intern — Milan, Italy")
+        self.assertEqual(rec["Company ID"], "polids-aaaaaaaa")
+
+    def test_the_machine_notes_half_maps_to_a4_notes(self):
+        # Review splits A4's single `Notes` into `Matching Notes` (machine) and
+        # `Reviewer Notes` (human). The export has one A4 column to fill, and the
+        # machine half is what A4 means by Notes.
+        self.build_review()
+        out = self.tmp / "h.csv"
+        self.export("--out", str(out))
+        rows = list(csv.reader(io.StringIO(out.read_text(encoding="utf-8")), delimiter=";"))
+        rec = dict(zip(rows[0], rows[1]))
+        self.assertEqual(rec["Notes"], "[NEW COMPANY] machine prose")
+        self.assertNotEqual(rec["Notes"], "a colleague's note", "the human half must not win")
+
+    def test_columns_review_does_not_render_come_out_empty_not_invented(self):
+        self.build_review()
+        out = self.tmp / "h.csv"
+        self.export("--out", str(out))
+        rows = list(csv.reader(io.StringIO(out.read_text(encoding="utf-8")), delimiter=";"))
+        rec = dict(zip(rows[0], rows[1]))
+        for gone in ("Previously Contacted?", "Outreach Decision"):
+            self.assertEqual(rec[gone], "", f"{gone} is not in Review.xlsx, so it must not be guessed at")
+
+    def test_the_exported_csv_loads_as_history(self):
+        """The point of the command is that `loadHistory` can read what it writes.
+        Asserted through the real reader rather than by eyeballing the header."""
+        self.build_review()
+        out = self.tmp / "h.csv"
+        self.export("--out", str(out))
+        text = out.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("Company / Outreach Account;"))
+        self.assertIn("Alpha Srl;", text)
+        # The reader the engine uses splits on ';' and resolves these by name.
+        for required in ("Company / Outreach Account", "Matching Job Titles", "Job Links", "Locations", "Company ID"):
+            self.assertIn(required, text.split("\n")[0])
+
+    def test_refuses_a_folder_with_no_review_file(self):
+        proc = self.export()
+        self.assertEqual(proc.returncode, 2)
+        self.assertFalse(json.loads(proc.stdout)["ok"])
 
 
 class TestMigrateReview(TmpDirCase):

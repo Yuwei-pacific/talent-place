@@ -75,7 +75,7 @@ Only `employer-smoke` hits the live network, and because the chain is `&&` its f
 ### Running a search
 
 ```bash
-npm run discover -- --config <run.json> --out <dir> [--history ../index/<Master>_Company_Index.csv]
+npm run discover -- --config <run.json> --out <dir> --history <exported history.csv>
 ```
 
 `src/cli.ts` is the **deterministic half** of a run: query fan-out → discover → geo → dedup → prefilter → `cards.json` + `run-report.json`. It deliberately stops there. Reading each surviving description and judging it against A1 and the Master's A2 stays with the agent; putting that judgement behind a flag would make it a checkbox.
@@ -99,15 +99,15 @@ It answers *is the page alive / does it mention a stage / is there an apply path
 Both sidecars go to `stage` through one flag — a directory, or a single file (identified by its header):
 
 ```bash
-python3 python/sync_export.py stage --dir "<Master>" --history index/<Master>_Company_Index.csv \
-    --tsv outputs/output-YYYY-MM-DD.tsv --evidence <run dir>
+python3 python/sync_export.py stage --dir "<Master>" --history <run dir>/history.csv \
+    --tsv <run dir>/run.tsv --evidence <run dir>
 ```
 
 `role-evidence.csv` — per-role `posted`, `alternate_urls`, `search_query`. A4's TSV is a fixed 22 columns and one row per **company**, so a run has nowhere to put those. `employer-checks.csv` additionally gives each probed role its **own** `Verification Status` in `Roles.xlsx` instead of the company-level value; an unprobed role keeps the company answer rather than inheriting a neighbour's. They land like this:
 
 ```bash
-python3 python/sync_export.py stage --dir "<Master>" --history index/<Master>_Company_Index.csv \
-    --tsv outputs/output-YYYY-MM-DD.tsv --evidence <run dir>/role-evidence.csv
+python3 python/sync_export.py stage --dir "<Master>" --history <run dir>/history.csv \
+    --tsv <run dir>/run.tsv --evidence <run dir>/role-evidence.csv
 ```
 
 Without `--evidence` those columns stay empty and the manifest lists them under `columns_without_source`; with it, that list is empty. Freshness in particular — A1 requires `verificare l'attualità`, and before this the posted date was dropped between the card stage and the report.
@@ -127,12 +127,15 @@ delegating**, by path. A polling loop whose subject was never promised is a
 timer, not a wait.
 
 **A run is not finished until its output is somewhere durable.** The TSV belongs
-in `outputs/output-YYYY-MM-DD.tsv`. `outputs/` now holds run output and nothing
-else — the two historical TSVs that used to live there were FIXTURES and moved to
-`engine/test/fixtures/`, because a fixture filed under a directory called
-"outputs" reads as discardable. A run left in `/tmp` is a run that will be wiped. A4 allows either
-naming an output directory or declaring in the reply that nothing external was
-saved — **at least one of the two must happen**, and silence does neither.
+in the run's own output directory, next to the `cards.json`, `role-evidence.csv`
+and `employer-checks.csv` it already wrote — one directory per run, named by the
+request (A4). There is no repo-level `outputs/` any more: it held two *fixtures*
+alongside one real run artifact, and a fixture filed under a directory called
+"outputs" reads as discardable. Those fixtures are in `engine/test/fixtures/` now.
+
+A run left in `/tmp` is a run that will be wiped. A4 allows either naming an
+output directory or declaring in the reply that nothing external was saved —
+**at least one of the two must happen**, and silence does neither.
 
 ## The A1–A4 method
 
@@ -174,7 +177,8 @@ Discovery adapters live in `src/discovery/`, each returning `Card[]` behind the 
 - **`tsconfig.json` `include` is an explicit allowlist, not a glob.** A new `src/*.ts` file will silently not compile until it is added there. The existing `include` is the authoritative list of live modules.
 - **`lib/` is gitignored build output that the tests import.** A fresh clone must `npm install` before anything runs, and editing `src/` without rebuilding leaves tests running the old code — this is why `npm test` runs `build` first.
 - Imports use NodeNext ESM, so intra-repo specifiers end in `.js` even in `.ts` files (`from './types.js'`).
-- The canonical CSV is **semicolon**-delimited; TSV output is **tab**-delimited. `index/Strategic_Design_Company_Index.csv` carries 38 physical header cells but only the first 23 are real (the 22 A4 columns plus `Company ID`); the rest are empty columns inherited from the original xlsx export — don't treat them as real. `pull` appends a `Reviewer Notes` column the first time it has a colleague's note to store.
+- The canonical CSV is **semicolon**-delimited; TSV output is **tab**-delimited. The archived `archive/Strategic_Design_Company_Index.csv` carries 38 physical header cells but only the first 23 are real (the 22 A4 columns plus `Company ID`); the rest are empty columns inherited from the original xlsx export — don't treat them as real. `pull` appends a `Reviewer Notes` column the first time it has a colleague's note to store.
+- **Where the history comes from (changed 2026-09-18).** `index/` is archived. The run dedups against `Review.xlsx` via `sync_export.py export-history --dir <Master> --out <csv>`, because that is the record colleagues actually maintain: measured that day, the canonical had gone 62 companies stale (118 against Review's 180) and deduping a run against it re-proposed **76 roles that had just been published**. `A3.history_file` points at the Master's `Review.xlsx`.
 - In the TSV, columns 1–20 are mandatory; 21–22 (`First Contact Date`, `Recall`) are production extensions: leave empty for new roles, but preserve them when updating an existing row. **Every row must have exactly as many tabs as the header, using empty fields for columns with no value** — neither omitting trailing tabs nor inserting blanks mid-row. The two fixtures in `engine/test/fixtures/` violate this in two different ways — `tsv-short-2026-09-10.tsv` is short by two columns, `tsv-shifted-2026-09-11.tsv` has its tail shifted +2 — and `stage` refuses both. They are what proves `stage` refuses bad input, so deleting them turns **6 tests into skips while the suite still reports OK** (measured; the older docs here said three).
 - **The tab-count rule alone is not enough.** A row shifted sideways still has the right count. `stage` also validates values against A4's closed sets (`Verification Status` prefixes, `Outreach Decision`, `Contact Search Status`) and against the date columns; `--lenient` overrides and records the problems in the run manifest.
 - **Multi-value cells need a per-column separator policy, not one splitter.** `Work Modes` legitimately contains `;` *inside* a single value (`"Physical location shown; onsite/hybrid status to verify"`, 50 rows), so a universal `;` split shreds it. `reconcile.MULTI_VALUE_SPEC` holds the policy; `Work Modes` has `semicolon: false`.
@@ -200,8 +204,8 @@ Do not add a new config file per search run (A4) and do not create a second copy
 
 Machine-detected, deliberately not auto-resolved — each needs someone who knows the history:
 
-- `index/duplicate-names-report.csv` — 5 company names on two rows each (`JAKALA`, `KPMG`, `NTT DATA`, `PwC`, `TeamViewer`) **plus** one orphan row (index 82: a bare `First Contact Date = 03/09/2026` with no company, between `Logotel` and `Doctolib`).
+- `archive/duplicate-names-report.csv` — 5 company names on two rows each (`JAKALA`, `KPMG`, `NTT DATA`, `PwC`, `TeamViewer`) **plus** one orphan row (index 82: a bare `First Contact Date = 03/09/2026` with no company, between `Logotel` and `Doctolib`).
 - **Column-shift corruption** in `Bain & Company` and `Moncler`: `Verification Status` and `Last Checked` hold the next row's values / header text. Flagged by `doctor` and `init-review`. The true values are unknown.
-- `Moncler Group` (from a run) vs `Moncler` (canonical) — same company or not? Decided via `index/company-aliases.csv` (human-maintained: `alias_norm;canonical_id;note`), never by fuzzy matching.
+- `Moncler Group` (from a run) vs `Moncler` (canonical) — same company or not? Decided via `company-aliases.csv` in `jobSearch_outPut/` (human-maintained: `alias_norm;canonical_id;note`) — that is where `load_aliases` looks, not the repo. Never by fuzzy matching.
 
 `sync_export.py` refuses to guess on any of these: a near-duplicate is deferred, an ambiguous update is refused, an unparseable date is reported and left visible.

@@ -8,7 +8,11 @@ import { splitColumn } from '../lib/normalize.js';
 
 // Resolved relative to this file so the test is not machine-specific.
 const HERE = dirname(fileURLToPath(import.meta.url));
-const CSV = join(HERE, '..', '..', 'index', 'Strategic_Design_Company_Index.csv');
+// Frozen sample, not the live history: the run dedups against the Master's
+// Review.xlsx (via `sync_export.py export-history`), which no test can depend on
+// and which has version history only in SharePoint. This file is the fixture
+// the parser and the role key are tested against.
+const CSV = join(HERE, 'fixtures', 'strategic-design-history.csv');
 
 const h = loadHistory(CSV);
 assert.ok(h.size >= 100, `expected >=100 companies, got ${h.size}`);
