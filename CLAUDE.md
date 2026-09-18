@@ -114,6 +114,25 @@ Without `--evidence` those columns stay empty and the manifest lists them under 
 
 Before `src/cli.ts` existed, the adapters, `geoFilter`, `dedupCards`, `prefilter` and `observe` were all an uncalled library and the run loop lived in a throwaway script — so nothing about a run was reproducible. **If you find yourself writing a `/tmp` script to drive the adapters, that script belongs in `src/` instead.**
 
+## Two rules for whoever is driving a run
+
+Both cost real time on the 2026-09-17 run and neither is enforced by any test, so
+they live here.
+
+**Wait for the completion notice; never poll for a file nobody promised.** That
+run spent ~24 minutes in `until [ -f /tmp/employer-verify.json ]; do sleep 15; done`
+loops waiting on a file a subagent was never asked to write — the subagent
+returned the data in its reply. If a file really is wanted, ask for it **when
+delegating**, by path. A polling loop whose subject was never promised is a
+timer, not a wait.
+
+**A run is not finished until its output is somewhere durable.** The TSV belongs
+in `outputs/output-YYYY-MM-DD.tsv` (see the note in `outputs/` history: both
+shipped TSVs are refused by `stage`, so match the column contract, not the
+files). A run left in `/tmp` is a run that will be wiped. A4 allows either
+naming an output directory or declaring in the reply that nothing external was
+saved — **at least one of the two must happen**, and silence does neither.
+
 ## The A1–A4 method
 
 | File | Governs | Scope |
@@ -123,7 +142,7 @@ Before `src/cli.ts` existed, the adapters, `geoFilter`, `dedupCards`, `prefilter
 | `A3-cohort.yaml` | Student constraints, preferences, `history_file` pointer | one per edition |
 | `A4-regole-registrazione.md` | Output format: TSV columns, Notes, Verification Status, Indeed accounting | all Masters |
 
-`config/00-Talent placement&Design lab.md` is the human-facing guide and is **not** an agent input.
+`config/` holds **agent inputs only** — A1, A4, and one A2/A3 pair per Master. The human-facing guide (how we work, who maintains what, the weekly flow) is `README.md` at the repo root and is **not** an agent input; it used to live in `config/` as `00-Talent placement&Design lab.md` and was moved out so the invariant above is checkable rather than aspirational.
 
 Precedence: A1 sets method, A2 sets the educational perimeter, A3 sets student conditions, A4 sets output. **A3 preferences never rewrite A2's perimeter.** A2 `master_id` must match A3's and the requested Master — if they disagree or one is missing, stop and ask rather than substituting a Master by analogy.
 
