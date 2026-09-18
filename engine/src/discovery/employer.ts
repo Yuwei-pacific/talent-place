@@ -9,7 +9,8 @@
 //   extraction. Used for verify-first (A1: employer preferred) and for
 //   unknown ATS / self-built career pages (layer 3).
 import type { Card } from '../types.js';
-import { fetchText } from './http.js';
+import type { Guard } from '../ratelimit.js';
+import { fetchGuarded, fetchText } from './http.js';
 
 const INTERN_HINT = /\b(intern|internship|stage|stagista|tirocinio|tirocinante|working student|curricular)\b/i;
 
@@ -57,13 +58,40 @@ export interface EmployerCheck {
   hasApply: boolean;
   title: string;
   detail: string;
+  /** Why it was unreachable, when it was. Kept so a caller can tell a refusal
+   *  (`blocked`) from a dead posting (`gone`) without parsing `detail`, which
+   *  is the same mistake the transport used to make with 403 vs 429. */
+  kind?: 'blocked' | 'gone' | 'error';
+  /** Wall-clock cost, so a run report can show what verification cost. */
+  elapsedMs?: number;
 }
 
-/** Generic employer-page check: is the page alive, does it mention a stage, is there an apply path? */
-export async function checkEmployerPage(url: string): Promise<EmployerCheck> {
-  const res = await fetchText(url);
+/**
+ * Generic employer-page check: is the page alive, does it mention a stage, is
+ * there an apply path?
+ *
+ * Measured against the 9 employer pages the 2026-09-17 run verified with a full
+ * browser: all 9 answered here in 10.9s total (~1.2s each) with no JS needed,
+ * against ~72s per page through the browser. So the browser is the ESCALATION,
+ * not the default — pass a `guard` and pace it like any other source.
+ */
+export async function checkEmployerPage(url: string, guard?: Guard): Promise<EmployerCheck> {
+  const t0 = Date.now();
+  const res = guard ? await fetchGuarded(url, guard) : await fetchText(url);
   if (!res.ok) {
-    return { url, reachable: false, hasInternSignal: false, hasApply: false, title: '', detail: `${res.kind}: ${res.detail}` };
+    return {
+      url,
+      reachable: false,
+      hasInternSignal: false,
+      hasApply: false,
+      title: '',
+      // `res.detail` already names the host and status; prefixing it with the
+      // kind made A4's `Blocked — <motivo>` read "Blocked — blocked: HTTP 403",
+      // which tells a human nothing the second time. The kind is its own field.
+      detail: res.detail,
+      kind: res.kind,
+      elapsedMs: Date.now() - t0,
+    };
   }
   const titleM = res.text.match(/<title>([\s\S]*?)<\/title>/i);
   const title = titleM ? titleM[1].replace(/\s+/g, ' ').trim().slice(0, 120) : '';
@@ -75,5 +103,6 @@ export async function checkEmployerPage(url: string): Promise<EmployerCheck> {
     hasApply: /apply|candidati|invia (il tuo )?curriculum|bewerbung/i.test(head),
     title,
     detail: 'page alive',
+    elapsedMs: Date.now() - t0,
   };
 }

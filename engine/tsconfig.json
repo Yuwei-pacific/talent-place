@@ -11,6 +11,7 @@
     "skipLibCheck": true
   },
   "include": ["src/pipeline.ts",
+    "src/verify.ts",
     "src/cli.ts",
     "src/ratelimit.ts",
     "src/discovery/run.ts",

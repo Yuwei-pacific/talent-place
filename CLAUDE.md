@@ -82,7 +82,28 @@ npm run discover -- --config <run.json> --out <dir> [--history ../index/<Master>
 
 `run-report.json` records per-source `requests / ok / 429 / 403 / stop_kind / reason`. That is the A1 "declare the reason" duty as data rather than prose.
 
-It also writes `role-evidence.csv` — per-role `posted`, `alternate_urls`, `search_query`. A4's TSV is a fixed 22 columns and one row per **company**, so a run has nowhere to put those. Pass it to `stage` and they land in `Roles.xlsx`:
+### Verifying, before reaching for a browser
+
+```bash
+npm run discover -- verify --urls <list.txt> --out <dir>
+```
+
+One URL per line, optionally `label;url`. Writes `employer-checks.csv`: `reachable`, `has_apply`, `has_intern_signal`, `title`, and an A4-shaped `status` per URL.
+
+**This is the cheap probe, and it is the default.** On the 2026-09-17 run, 15 roles were verified through a headless browser at ~72s each (18 minutes). Re-probing the 9 employer pages that run produced answered all 9 in 10.9s, about 1.2s each, with no JS needed. Escalate to a browser only for the URLs this cannot answer — in that batch, 3 of 10 (an apply button rendered client-side, and one soft 404).
+
+It answers *is the page alive / does it mention a stage / is there an apply path*. It does **not** judge whether a role suits a student; that stays with the agent.
+
+## Publishing
+
+Both sidecars go to `stage` through one flag — a directory, or a single file (identified by its header):
+
+```bash
+python3 python/sync_export.py stage --dir "<Master>" --history index/<Master>_Company_Index.csv \
+    --tsv outputs/output-YYYY-MM-DD.tsv --evidence <run dir>
+```
+
+`role-evidence.csv` — per-role `posted`, `alternate_urls`, `search_query`. A4's TSV is a fixed 22 columns and one row per **company**, so a run has nowhere to put those. `employer-checks.csv` additionally gives each probed role its **own** `Verification Status` in `Roles.xlsx` instead of the company-level value; an unprobed role keeps the company answer rather than inheriting a neighbour's. They land like this:
 
 ```bash
 python3 python/sync_export.py stage --dir "<Master>" --history index/<Master>_Company_Index.csv \

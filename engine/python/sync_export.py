@@ -191,6 +191,9 @@ NOT_RECOVERABLE_FROM_FLAT_TSV = {"Posted / Result Age", "Search Query"}
 
 EVIDENCE_COLUMNS = ["url", "posted", "alternate_urls", "search_query"]
 
+# Written by `cli verify`: one row per employer URL actually probed.
+CHECK_COLUMNS = ["url", "label", "status", "reachable", "has_apply", "has_intern_signal", "title", "detail", "elapsed_ms"]
+
 
 def norm_role_url(url: str) -> str:
     """Match the engine's normUrl: drop the query string and trailing slashes,
@@ -199,29 +202,53 @@ def norm_role_url(url: str) -> str:
     return (url or "").strip().split("?")[0].rstrip("/").lower()
 
 
-def load_evidence(path: str | None) -> dict:
-    """Read a role-evidence sidecar into {normalised url: fields}."""
-    if not path:
-        return {}
-    text = Path(path).read_text(encoding="utf-8")
+def _read_sidecar(path: Path, columns: list[str]) -> dict:
+    text = path.read_text(encoding="utf-8")
     reader = csv.reader(io.StringIO(text), delimiter=";")
     try:
         header = next(reader)
     except StopIteration:
         return {}
-    missing = [c for c in EVIDENCE_COLUMNS if c not in header]
+    missing = [c for c in columns if c not in header]
     if missing:
         raise StageError("evidence file %s is missing column(s): %s" % (path, ", ".join(missing)))
-    idx = {c: header.index(c) for c in EVIDENCE_COLUMNS}
+    idx = {c: header.index(c) for c in columns}
     out = {}
     for row in reader:
         if not row or not row[0].strip():
             continue
         key = norm_role_url(row[0])
         if key:
-            out[key] = {c: (row[idx[c]].strip() if idx[c] < len(row) else "") for c in EVIDENCE_COLUMNS}
+            out[key] = {c: (row[idx[c]].strip() if idx[c] < len(row) else "") for c in columns}
     return out
 
+
+def load_evidence(path: str | None) -> dict:
+    """Read a run's sidecars into {"roles": {...}, "checks": {...}}, both keyed
+    by normalised job URL.
+
+    `path` may be a FILE (a role-evidence sidecar) or a DIRECTORY, in which case
+    every sidecar a run wrote is read. A run that only produced employer checks
+    still supplies something useful, so neither file is required.
+    """
+    if not path:
+        return {"roles": {}, "checks": {}}
+    target = Path(path)
+    if target.is_dir():
+        roles = target / "role-evidence.csv"
+        checks = target / "employer-checks.csv"
+        return {
+            "roles": _read_sidecar(roles, EVIDENCE_COLUMNS) if roles.exists() else {},
+            "checks": _read_sidecar(checks, CHECK_COLUMNS) if checks.exists() else {},
+        }
+    # A single FILE: work out which sidecar it is from its header rather than
+    # assuming. Passing an employer-checks file used to fail with "missing
+    # column: posted", which tells the caller nothing about what to do.
+    head = target.read_text(encoding="utf-8").split("\n", 1)[0]
+    columns = head.split(";")
+    if "status" in columns and "has_apply" in columns:
+        return {"roles": {}, "checks": _read_sidecar(target, CHECK_COLUMNS)}
+    return {"roles": _read_sidecar(target, EVIDENCE_COLUMNS), "checks": {}}
 
 class StageError(Exception):
     pass
@@ -426,10 +453,13 @@ def explode_roles(
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Return (role_rows, company_rows).
 
-    `evidence` is a run's per-role sidecar keyed by normalised job URL. Columns
-    it cannot supply stay empty rather than being guessed at.
+    `evidence` is {"roles": {...}, "checks": {...}} keyed by normalised job URL
+    -- see load_evidence. Columns it cannot supply stay empty rather than being
+    guessed at.
     """
     evidence = evidence or {}
+    role_ev = evidence.get("roles", {})
+    checks = evidence.get("checks", {})
     role_rows: list[dict[str, str]] = []
     company_rows: list[dict[str, str]] = []
 
@@ -447,7 +477,9 @@ def explode_roles(
 
         for i in range(count):
             rv = _role_values(cells, i, count)
-            ev = evidence.get(norm_role_url(rv["Primary Job URL"]), {})
+            key = norm_role_url(rv["Primary Job URL"])
+            ev = role_ev.get(key, {})
+            check = checks.get(key, {})
             role_rows.append(
                 {
                     "Company / Outreach Account": company,
@@ -464,7 +496,10 @@ def explode_roles(
                     "Work Mode": col("Work Modes"),
                     "Curricular Status": col("Curricular Evidence"),
                     "Previously Contacted?": col("Previously Contacted?"),
-                    "Verification Status": col("Verification Status"),
+                    # Per-role when the run actually probed THIS url, otherwise the
+                    # company-level value. Never invented: an unprobed role keeps the
+                    # company answer rather than inheriting a neighbour's.
+                    "Verification Status": check.get("status") or col("Verification Status"),
                     "Posted / Result Age": ev.get("posted", ""),
                     "Search Query": ev.get("search_query", ""),
                     "Date Checked": col("Last Checked"),

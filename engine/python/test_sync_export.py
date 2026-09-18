@@ -302,15 +302,16 @@ class TestRoleEvidence(TmpDirCase):
                 "https://x.example/job/1;3 days ago;https://mirror.example/1;service design stage\n"
             )
         )
-        self.assertIn("https://x.example/job/1", ev)
-        self.assertEqual(ev["https://x.example/job/1"]["posted"], "3 days ago")
-        self.assertEqual(ev["https://x.example/job/1"]["alternate_urls"], "https://mirror.example/1")
+        self.assertIn("https://x.example/job/1", ev["roles"])
+        self.assertEqual(ev["roles"]["https://x.example/job/1"]["posted"], "3 days ago")
+        self.assertEqual(ev["roles"]["https://x.example/job/1"]["alternate_urls"], "https://mirror.example/1")
+        self.assertEqual(ev["checks"], {}, "a run with no employer checks still loads")
 
     def test_evidence_joins_on_a_normalised_url(self):
         # A run's URL may carry campaign parameters the TSV's does not; the key
         # has to survive that or the evidence silently never lands.
         ev = load_evidence(self._write_evidence("url;posted;alternate_urls;search_query\nhttps://x.example/job/1?utm=abc;1 week ago;;q\n"))
-        self.assertIn(norm_role_url("https://x.example/job/1/"), ev)
+        self.assertIn(norm_role_url("https://x.example/job/1/"), ev["roles"])
 
     def test_a_malformed_evidence_file_is_refused_not_ignored(self):
         bad = self._write_evidence("url;posted\nhttps://x.example/1;today\n")
@@ -319,8 +320,8 @@ class TestRoleEvidence(TmpDirCase):
         self.assertIn("missing column", str(ctx.exception))
 
     def test_no_evidence_leaves_the_columns_empty(self):
-        self.assertEqual(load_evidence(None), {})
-        self.assertEqual(load_evidence(""), {})
+        self.assertEqual(load_evidence(None), {"roles": {}, "checks": {}})
+        self.assertEqual(load_evidence(""), {"roles": {}, "checks": {}})
 
     def test_explode_roles_applies_evidence_to_the_matching_role_only(self):
         row = self._row(
@@ -328,11 +329,75 @@ class TestRoleEvidence(TmpDirCase):
             "1. First Intern | 2. Second Intern",
             "2",
         )
-        roles, _ = explode_roles([row], {"https://a.example/2": {"posted": "5 days ago", "search_query": "q2", "alternate_urls": ""}})
+        roles, _ = explode_roles(
+            [row],
+            {"roles": {"https://a.example/2": {"posted": "5 days ago", "search_query": "q2", "alternate_urls": ""}}, "checks": {}},
+        )
         self.assertEqual(roles[0]["Posted / Result Age"], "")
         self.assertEqual(roles[1]["Posted / Result Age"], "5 days ago")
         self.assertEqual(roles[1]["Search Query"], "q2")
         self.assertEqual(roles[0]["Search Query"], "")
+
+    def _write_checks(self, text: str) -> str:
+        path = Path(self.tmp) / "employer-checks.csv"
+        path.write_text(text, encoding="utf-8")
+        return str(path)
+
+    def test_a_run_directory_supplies_both_sidecars(self):
+        # A run writes both files next to each other; pointing --evidence at the
+        # directory is the natural invocation, and neither file is required.
+        (Path(self.tmp) / "role-evidence.csv").write_text(
+            "url;posted;alternate_urls;search_query\nhttps://a.example/1;3 days ago;;q\n", encoding="utf-8"
+        )
+        self._write_checks(
+            "url;label;status;reachable;has_apply;has_intern_signal;title;detail;elapsed_ms\n"
+            "https://a.example/1;Acme;Employer verified active;true;true;true;Stage;page alive;412\n"
+        )
+        ev = load_evidence(self.tmp)
+        self.assertIn("https://a.example/1", ev["roles"])
+        self.assertIn("https://a.example/1", ev["checks"])
+        self.assertEqual(ev["checks"]["https://a.example/1"]["status"], "Employer verified active")
+
+    def test_a_single_file_is_identified_by_its_header(self):
+        # Passing an employer-checks file directly used to fail with "missing
+        # column: posted", which tells the caller nothing they can act on.
+        checks_only = self._write_checks(
+            "url;label;status;reachable;has_apply;has_intern_signal;title;detail;elapsed_ms\n"
+            "https://a.example/1;Acme;Employer verified active;true;true;true;Stage;page alive;412\n"
+        )
+        ev = load_evidence(checks_only)
+        self.assertEqual(ev["roles"], {})
+        self.assertIn("https://a.example/1", ev["checks"])
+
+        roles_only = self._write_evidence("url;posted;alternate_urls;search_query\nhttps://a.example/1;today;;q\n")
+        self.assertIn("https://a.example/1", load_evidence(roles_only)["roles"])
+
+    def test_no_evidence_at_all_is_not_an_error(self):
+        self.assertEqual(load_evidence(None), {"roles": {}, "checks": {}})
+
+    def test_a_probed_role_carries_its_own_verification_status(self):
+        # Roles.xlsx is per ROLE, so a role the run actually probed should say so
+        # rather than inheriting the company-level answer.
+        row = self._row(
+            "1. https://a.example/1 | 2. https://a.example/2",
+            "1. First Intern | 2. Second Intern",
+            "2",
+        )
+        roles, _ = explode_roles(
+            [row],
+            {
+                "roles": {},
+                "checks": {
+                    "https://a.example/2": {"status": "Employer verified active"},
+                },
+            },
+        )
+        self.assertEqual(roles[1]["Verification Status"], "Employer verified active")
+        self.assertEqual(
+            roles[0]["Verification Status"],
+            "Portal verified",
+            "an unprobed role keeps the company-level value rather than inheriting a neighbour's",
+        )
 
     def test_un_numbered_links_still_align_by_position(self):
         row = self._row(

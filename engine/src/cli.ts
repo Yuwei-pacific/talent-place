@@ -17,6 +17,7 @@ import type { Card } from './types.js';
 import { runPipeline, type PipelineConfig, type PipelineResult } from './pipeline.js';
 import { defaultAdapters } from './discovery/run.js';
 import { loadHistory, checkDup } from './history.js';
+import { runVerification, parseTargets } from './verify.js';
 
 function parseArgs(argv: string[]): Record<string, string> {
   const out: Record<string, string> = {};
@@ -71,17 +72,67 @@ function summary(r: PipelineResult, masterId: string, edition: string): string {
   return lines.join('\n');
 }
 
+const USAGE = [
+  'usage:',
+  '  node lib/cli.js discover --config <run.json> --out <dir> [--history <canonical.csv>]',
+  '  node lib/cli.js verify   --urls <list.txt>  --out <dir>',
+  '',
+  'verify reads one URL per line (optionally "label;url"), probes each on the',
+  'employer side, and writes employer-checks.csv with an A4 Verification Status',
+  'per URL. It answers "is this page alive / does it mention a stage / is there',
+  'an apply path"; it does not judge whether a role suits a student.',
+].join('\n');
+
+/** `verify` — the cheap employer probe, as a batch. */
+async function cmdVerify(args: Record<string, string>): Promise<number> {
+  if (!args.urls || !args.out) {
+    process.stderr.write('verify needs --urls and --out\n');
+    return 2;
+  }
+  const targets = parseTargets(readFileSync(resolve(args.urls), 'utf-8'));
+  if (targets.length === 0) {
+    process.stderr.write(`no URLs found in ${args.urls}\n`);
+    return 2;
+  }
+  const outDir = resolve(args.out);
+  mkdirSync(outDir, { recursive: true });
+
+  const { results, report } = await runVerification(targets, {
+    width: args.width ? Number(args.width) : undefined,
+    ratePerSec: args.rate ? Number(args.rate) : undefined,
+  });
+
+  const cell = (v: unknown) => String(v).replace(/[\t\r\n;]+/g, ' ').trim();
+  const header = 'url;label;status;reachable;has_apply;has_intern_signal;title;detail;elapsed_ms';
+  const body = results.map((r) =>
+    [r.url, r.label, r.status, r.reachable, r.hasApply, r.hasInternSignal, r.title, r.detail, r.elapsedMs]
+      .map(cell)
+      .join(';'),
+  );
+  writeFileSync(join(outDir, 'employer-checks.csv'), [header, ...body].join('\n') + '\n');
+
+  process.stdout.write(
+    `verified ${report.targets} URL(s) in ${(report.elapsedMs / 1000).toFixed(1)}s\n` +
+      `  Employer verified active : ${report.verifiedActive}\n` +
+      `  To verify                : ${report.toVerify}\n` +
+      `  Blocked                  : ${report.blocked}\n` +
+      `  requests ${report.health.requests} (ok ${report.health.ok}, 429 ${report.health.blocked429}, 403 ${report.health.blocked403})\n` +
+      `  wrote ${outDir}/employer-checks.csv\n`,
+  );
+  return 0;
+}
+
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
   const args = parseArgs(argv.slice(1));
 
-  if (cmd !== 'discover' || args.help) {
-    process.stderr.write(
-      'usage: node lib/cli.js discover --config <run.json> --out <dir> [--history <canonical.csv>]\n',
-    );
-    return cmd === 'discover' ? 0 : 2;
+  if (args.help || (cmd !== 'discover' && cmd !== 'verify')) {
+    process.stderr.write(USAGE + '\n');
+    return cmd === 'discover' || cmd === 'verify' ? 0 : 2;
   }
+  if (cmd === 'verify') return cmdVerify(args);
+
   if (!args.config || !args.out) {
     process.stderr.write('discover needs --config and --out\n');
     return 2;
