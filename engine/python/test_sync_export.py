@@ -30,6 +30,7 @@ from datetime import datetime  # noqa: E402
 
 from sync_export import (  # noqa: E402
     A4_COLUMNS,
+    CF_RANGE_ROWS,
     NOT_RECOVERABLE_FROM_FLAT_TSV,
     StageError,
     load_evidence,
@@ -830,8 +831,15 @@ class TestReviewWorkbook(TmpDirCase):
         ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
         header = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
         self.assertEqual(header, REVIEW_COLUMNS)
-        self.assertEqual(len(header), 24)
+        self.assertEqual(len(header), 22)
         self.assertNotIn("Notes", header, "Notes must be split")
+        # Both stay in A4 and in the TSV; Review.xlsx stops rendering them.
+        # "Previously Contacted?" is in HUMAN_COLS, so `stage` still copies it
+        # into the Company Summary sheet -- the value is not lost, only the
+        # ability to edit it here.
+        for gone in ("Previously Contacted?", "Outreach Decision"):
+            self.assertNotIn(gone, header, f"{gone} should no longer be rendered in Review.xlsx")
+            self.assertIn(gone, A4_COLUMNS, f"{gone} must stay an A4 column")
         self.assertIn("Matching Notes", header)
         self.assertIn("Reviewer Notes", header)
         # historical Notes seeds the machine column; the human column starts empty
@@ -874,26 +882,34 @@ class TestReviewWorkbook(TmpDirCase):
         for rng, rules in ws.conditional_formatting._cf_rules.items():
             by_range[str(rng.sqref)] = [r.formula[0] for r in rules]
 
-        # Exactly three rulesets, on these three columns. `First Contact Date`
-        # deliberately gets none of its own — it is REFERENCED by the status
-        # rule's formula, not coloured directly.
-        for name in ("Outreach Decision", "Recall", "Contact Search Status"):
-            letter = get_column_letter(header.index(name) + 1)
-            self.assertTrue(
-                any(s.startswith(letter) for s in by_range),
-                f"no rule on the {letter} range (column {name!r})",
-            )
-        # The INCONSISTENT rule must reference the STATUS column ($<m>2) and the
-        # DATE column ($<v>2). Getting either letter wrong makes the rule fire on
-        # the wrong data while still looking plausible.
-        m = get_column_letter(header.index("Contact Search Status") + 1)
-        v = get_column_letter(header.index("First Contact Date") + 1)
-        inconsistent = [f for f in by_range.get(f"{m}2:{m}2000", []) if "OR(" in f]
-        self.assertEqual(len(inconsistent), 1, "expected exactly one INCONSISTENT rule")
-        self.assertIn(f"${m}2=", inconsistent[0])
-        self.assertIn(f"${v}2", inconsistent[0])
-        # ...and the date column must NOT be a colour target itself
-        self.assertFalse(any(s.startswith(v) for s in by_range), f"{v} should have no ruleset of its own")
+        status = get_column_letter(header.index("Contact Search Status") + 1)
+        last = get_column_letter(len(REVIEW_COLUMNS))
+        row_range = f"A3:{last}{CF_RANGE_ROWS}"
+
+        # The whole row, one rule per coloured status, all anchored on the
+        # status cell. "Not started" has no rule because white is the sheet's
+        # own background -- the default costs nothing to maintain.
+        self.assertIn(row_range, by_range, f"expected a whole-row rule on {row_range}, got {sorted(by_range)}")
+        formulas = by_range[row_range]
+        self.assertEqual(len(formulas), 4, f"one rule per coloured status, got {formulas}")
+        for value in ("Job not suitable", "Potential contact", "Contact found", "Job found"):
+            self.assertIn(f'${status}3="{value}"', formulas)
+        self.assertNotIn(
+            f'${status}3="Not started"',
+            formulas,
+            "Not started must rely on the sheet background, not a rule",
+        )
+
+        # The status rule must NOT reference the date column any more. The old
+        # ruleset did, to detect contradictions, and that branch was removed on
+        # purpose: simpler to maintain, at the cost of the self-clearing amber.
+        date_col = get_column_letter(header.index("First Contact Date") + 1)
+        joined = " ".join(formulas)
+        self.assertNotIn(f"${date_col}3", joined, "the contradiction branch should be gone")
+
+        # Recall keeps its own two rules, on its own column.
+        recall = get_column_letter(header.index("Recall") + 1)
+        self.assertIn(f"{recall}2:{recall}{CF_RANGE_ROWS}", by_range)
 
     def test_color_is_idempotent(self):
         self.init()
@@ -1156,7 +1172,6 @@ class TestAppend(TmpDirCase):
             ("Recall", None),
             ("Contact Name", None),
             ("Contact Email / LinkedIn", None),
-            ("Outreach Decision", "Review"),
             ("Contact Search Status", "Not started"),
         ]:
             self.assertEqual(ws.cell(3, hdr.index(col) + 1).value, want, f"{col} should be {want!r}")
@@ -1179,7 +1194,7 @@ class TestAppend(TmpDirCase):
                     "Company / Outreach Account": "Esistente Srl",
                     "Company ID": "polids-11111111",
                     "Reviewer Notes": "a colleague's note",
-                    "Outreach Decision": "Yes",
+                    "Contact Search Status": "Contact found",
                     "First Contact Date": datetime(2026, 3, 9),
                 }
             ]
@@ -1191,7 +1206,7 @@ class TestAppend(TmpDirCase):
         ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
         hdr = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
         self.assertEqual(ws.cell(3, hdr.index("Reviewer Notes") + 1).value, "a colleague's note")
-        self.assertEqual(ws.cell(3, hdr.index("Outreach Decision") + 1).value, "Yes")
+        self.assertEqual(ws.cell(3, hdr.index("Contact Search Status") + 1).value, "Contact found")
         d = ws.cell(3, hdr.index("First Contact Date") + 1).value
         self.assertEqual((d.year, d.month, d.day), (2026, 3, 9))
 
@@ -1230,7 +1245,7 @@ class TestHarvestAndPull(TmpDirCase):
                 w.writerow(r)
         return p
 
-    def row(self, name, cid, contacted="03/09/2026", decision="Review", status="Contacted"):
+    def row(self, name, cid, contacted="03/09/2026", decision="Review", status="Contact found"):
         r = [""] * (len(A4_COLUMNS) + 1)
         r[0] = name
         r[A4_COLUMNS.index("First Contact Date")] = contacted
@@ -1272,20 +1287,20 @@ class TestHarvestAndPull(TmpDirCase):
         self.assertEqual(out["updates"], 0, "nothing changed, so nothing to write")
 
     def test_a_real_change_is_reported_as_a_conflict_and_written(self):
-        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa", decision="Review")])
-        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Outreach Decision": "Yes"})])
+        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa", status="Not started")])
+        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Contact Search Status": "Job found"})])
         h = json.loads(self.run_("harvest", canon).stdout)
         self.assertEqual(h["conflicts"], 1)
         self.assertEqual(len(h["conflict_detail"]), 1)
-        self.assertEqual(h["conflict_detail"][0]["canonical"], "Review")
-        self.assertEqual(h["conflict_detail"][0]["review"], "Yes")
+        self.assertEqual(h["conflict_detail"][0]["canonical"], "Not started")
+        self.assertEqual(h["conflict_detail"][0]["review"], "Job found")
 
         p = self.run_("pull", canon, "--report", str(self.tmp / "c.csv"))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         out = json.loads(p.stdout)
         self.assertEqual(out["cells_updated"], 1)
         rows = list(csv.reader(io.StringIO(canon.read_text(encoding="utf-8")), delimiter=";"))
-        self.assertEqual(rows[1][A4_COLUMNS.index("Outreach Decision")], "Yes")
+        self.assertEqual(rows[1][A4_COLUMNS.index("Contact Search Status")], "Job found")
         self.assertTrue((self.tmp / "c.csv").exists(), "the conflict report must be written")
 
     def test_pull_preserves_the_cells_existing_date_convention(self):
@@ -1299,14 +1314,16 @@ class TestHarvestAndPull(TmpDirCase):
     def test_harvest_never_writes(self):
         canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
         before = canon.read_bytes()
-        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Outreach Decision": "Yes"})])
+        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Contact Search Status": "Contact found"})])
         self.run_("harvest", canon)
         self.assertEqual(canon.read_bytes(), before, "harvest is the audit path: read-only")
 
     def test_pull_dry_run_writes_nothing(self):
         canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
         before = canon.read_bytes()
-        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Outreach Decision": "Yes"})])
+        # The value has to DIFFER from the canonical, or there is nothing to
+        # write and the test would pass for the wrong reason.
+        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Contact Search Status": "Job found"})])
         out = json.loads(self.run_("pull", canon, "--dry-run").stdout)
         self.assertTrue(out["dry_run"])
         self.assertEqual(out["cells_updated"], 1)
@@ -1319,7 +1336,7 @@ class TestHarvestAndPull(TmpDirCase):
         canon = self.make_canon(
             [self.row("KPMG", "polids-7187734f"), self.row("Altro Srl", "polids-bbbbbbbb"), self.row("KPMG", "polids-7187734f")]
         )
-        self.build_review([("KPMG", "polids-7187734f", {"Outreach Decision": "Yes"})])
+        self.build_review([("KPMG", "polids-7187734f", {"Contact Search Status": "Contact found"})])
         out = json.loads(self.run_("harvest", canon).stdout)
         self.assertEqual(out["updates"], 0, "must not pick one of the two rows")
         kinds = [c for c in out["conflict_detail"] if c["canonical"] == "duplicate_id"]
@@ -1327,7 +1344,7 @@ class TestHarvestAndPull(TmpDirCase):
 
     def test_a_company_only_in_review_is_appended_to_canonical(self):
         canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
-        self.build_review([("Brand New Srl", "polids-newnewne", {"Outreach Decision": "Yes"})])
+        self.build_review([("Brand New Srl", "polids-newnewne", {"Contact Search Status": "Contact found"})])
         out = json.loads(self.run_("pull", canon).stdout)
         self.assertEqual(out["companies_appended"], 1)
         rows = list(csv.reader(io.StringIO(canon.read_text(encoding="utf-8")), delimiter=";"))
@@ -1348,9 +1365,189 @@ class TestHarvestAndPull(TmpDirCase):
 
     def test_pull_takes_a_backup(self):
         canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
-        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Outreach Decision": "Yes"})])
+        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Contact Search Status": "Job found"})])
         self.run_("pull", canon)
         self.assertTrue(list((self.tmp / "_backups").glob("canon-*.csv")))
+
+
+class TestMigrateReview(TmpDirCase):
+    """Rebuilding Review.xlsx onto a changed REVIEW_COLUMNS.
+
+    `stage` and `append` write into the sheet at POSITIONS taken from
+    REVIEW_COLUMNS, so changing that list without a migration puts every value
+    after the change into the wrong column -- and the tab-count era's lesson
+    applies here too: the file still looks fine.
+    """
+
+    # The 24-column set that shipped before the vocabulary change.
+    OLD_COLUMNS = [
+        "Company / Outreach Account",
+        "Brands / Business Units",
+        "In Italy?",
+        "Locations",
+        "Master-fit Themes",
+        "Matching Job Titles",
+        "Job Links",
+        "Role Count",
+        "Curricular Evidence",
+        "Work Modes",
+        "Sources / Portals",
+        "Previously Contacted?",
+        "Contact Search Status",
+        "Contact Name",
+        "Contact Role",
+        "Contact Email / LinkedIn",
+        "Outreach Decision",
+        "Matching Notes",
+        "Reviewer Notes",
+        "Verification Status",
+        "Last Checked",
+        "First Contact Date",
+        "Recall",
+        "Company ID",
+    ]
+
+    def build_old_sheet(self, rows):
+        """rows: list of {column: value}"""
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Review"
+        ws.cell(1, 1, "old banner")
+        for c, name in enumerate(self.OLD_COLUMNS, start=1):
+            ws.cell(2, c, name)
+        for i, vals in enumerate(rows):
+            ws.cell(3 + i, 1, vals.get("Company / Outreach Account", f"Co {i}"))
+            for col, v in vals.items():
+                ws.cell(3 + i, self.OLD_COLUMNS.index(col) + 1, v)
+        wb.save(self.tmp / "Review.xlsx")
+
+    def migrate(self, *extra):
+        return subprocess.run(
+            [sys.executable, str(HERE / "sync_export.py"), "migrate-review", "--dir", str(self.tmp), *extra],
+            capture_output=True,
+            text=True,
+        )
+
+    def read_new(self):
+        from openpyxl import load_workbook
+
+        ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
+        hdr = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
+        out = {}
+        for r in range(3, ws.max_row + 1):
+            if not ws.cell(r, 1).value:
+                continue
+            out[ws.cell(r, 1).value] = {h: ws.cell(r, c + 1).value for c, h in enumerate(hdr) if h}
+        return hdr, out
+
+    def test_carries_every_cell_across_a_changed_column_set(self):
+        self.build_old_sheet(
+            [
+                {
+                    "Company / Outreach Account": "Alpha Srl",
+                    "Contact Search Status": "Contacted",
+                    "Contact Name": "Enrica Marro",
+                    "Matching Notes": "[NEW COMPANY] ...",
+                    "Previously Contacted?": "Yes",
+                    "Outreach Decision": "Review",
+                    "First Contact Date": datetime(2026, 9, 3),
+                    "Last Checked": datetime(2026, 8, 27),
+                    "Company ID": "polids-aaaaaaaa",
+                }
+            ]
+        )
+        proc = self.migrate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        out = json.loads(proc.stdout)
+        self.assertEqual(out["rows"], 1)
+        self.assertEqual(out["columns_dropped"], ["Previously Contacted?", "Outreach Decision"])
+
+        hdr, by = self.read_new()
+        self.assertEqual(hdr, REVIEW_COLUMNS)
+        row = by["Alpha Srl"]
+        self.assertEqual(row["Contact Name"], "Enrica Marro", "a cell after the dropped columns must not shift")
+        self.assertEqual(row["Matching Notes"], "[NEW COMPANY] ...")
+        self.assertEqual(row["Company ID"], "polids-aaaaaaaa")
+        self.assertIsInstance(row["First Contact Date"], datetime, "real dates must survive as dates")
+        # number_format lives on the CELL, not the value, so read it directly.
+        from openpyxl import load_workbook
+
+        ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
+        hdr = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
+        cell = ws.cell(3, hdr.index("First Contact Date") + 1)
+        self.assertEqual(cell.number_format, "DD/MM/YYYY")
+
+    def test_translates_the_old_status_vocabulary(self):
+        self.build_old_sheet(
+            [
+                {"Company / Outreach Account": "A", "Contact Search Status": "Contacted"},
+                {"Company / Outreach Account": "B", "Contact Search Status": "No suitable contact"},
+                {"Company / Outreach Account": "C", "Contact Search Status": "Not started"},
+                {"Company / Outreach Account": "D", "Contact Search Status": ""},
+            ]
+        )
+        out = json.loads(self.migrate().stdout)
+        self.assertEqual(out["status_translated"], {"Contacted": 1, "No suitable contact": 1})
+        self.assertEqual(out["unmapped_status"], {})
+        by = self.read_new()[1]
+        self.assertEqual(by["A"]["Contact Search Status"], "Contact found")
+        self.assertEqual(by["B"]["Contact Search Status"], "Job not suitable")
+        self.assertEqual(by["C"]["Contact Search Status"], "Not started")
+
+    def test_an_unknown_status_is_refused_not_guessed_at(self):
+        """A value that is neither current nor known-legacy is someone's intent.
+        Migrating would leave it sitting under a vocabulary it does not belong
+        to, and nothing downstream would flag it."""
+        self.build_old_sheet([{"Company / Outreach Account": "A", "Contact Search Status": "chiamato forse"}])
+        before = (self.tmp / "Review.xlsx").read_bytes()
+        proc = self.migrate()
+        self.assertEqual(proc.returncode, 2)
+        out = json.loads(proc.stdout)
+        self.assertEqual(out["reason"], "unmapped_status")
+        self.assertEqual(out["unmapped"], {"chiamato forse": 1})
+        self.assertEqual((self.tmp / "Review.xlsx").read_bytes(), before, "a refusal writes nothing")
+
+        forced = self.migrate("--force")
+        self.assertEqual(forced.returncode, 0, forced.stdout)
+        self.assertEqual(json.loads(forced.stdout)["unmapped_status"], {"chiamato forse": 1})
+        self.assertEqual(self.read_new()[1]["A"]["Contact Search Status"], "chiamato forse")
+
+    def test_dry_run_reports_the_plan_and_writes_nothing(self):
+        self.build_old_sheet([{"Company / Outreach Account": "A", "Contact Search Status": "Contacted"}])
+        before = (self.tmp / "Review.xlsx").read_bytes()
+        out = json.loads(self.migrate("--dry-run").stdout)
+        self.assertTrue(out["dry_run"])
+        self.assertEqual(out["status_translated"], {"Contacted": 1})
+        self.assertEqual((self.tmp / "Review.xlsx").read_bytes(), before)
+
+    def test_takes_a_backup_and_leaves_colour_rules_installed(self):
+        self.build_old_sheet([{"Company / Outreach Account": "A", "Contact Search Status": "Contacted"}])
+        self.assertEqual(self.migrate().returncode, 0)
+        self.assertTrue(list((self.tmp / "_machine" / "backups").glob("Review-*.xlsx")), "pre-write backup")
+
+        from openpyxl import load_workbook
+
+        ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
+        rules = {str(rng.sqref): [r.formula[0] for r in rs] for rng, rs in ws.conditional_formatting._cf_rules.items()}
+        status_letter = get_column_letter(REVIEW_COLUMNS.index("Contact Search Status") + 1)
+        last = get_column_letter(len(REVIEW_COLUMNS))
+        self.assertIn(f"A3:{last}{CF_RANGE_ROWS}", rules)
+        self.assertIn(f'${status_letter}3="Contact found"', rules[f"A3:{last}{CF_RANGE_ROWS}"])
+
+    def test_a_row_with_no_company_is_skipped(self):
+        self.build_old_sheet([{"Company / Outreach Account": "A", "Contact Search Status": "Contacted"}])
+        from openpyxl import load_workbook
+
+        wb = load_workbook(self.tmp / "Review.xlsx")
+        wb["Review"].cell(4, 1, None)
+        wb["Review"].cell(4, 2, "orphan")
+        wb.save(self.tmp / "Review.xlsx")
+
+        out = json.loads(self.migrate().stdout)
+        self.assertEqual(out["rows"], 1)
+        self.assertEqual(list(self.read_new()[1]), ["A"])
 
 
 class TestAddVerifiedFixes(TmpDirCase):

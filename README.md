@@ -96,6 +96,15 @@ Non si incolla più niente in SharePoint: `sync_export.py` scrive direttamente n
    ```
 3. `init-review` crea `Review.xlsx` (una volta; poi rifiuta di sovrascrivere), `color` installa le regole di colore, `backfill-ids` aggiunge `Company ID`.
 
+**Se cambiano le colonne di `Review.xlsx`** (non i valori: le colonne), serve una migrazione, perché `stage` e `append` scrivono nella posizione dettata da `REVIEW_COLUMNS`: senza migrazione ogni valore dopo la modifica finisce nella colonna sbagliata.
+
+```
+python3 engine/python/sync_export.py migrate-review --dir "<percorso>" --dry-run
+python3 engine/python/sync_export.py migrate-review --dir "<percorso>"
+```
+
+Ogni cella viene trasferita **per nome di colonna**, quindi una colonna spostata, aggiunta o rimossa non fa scivolare niente. Le colonne che non esistono più vengono riportate, non cancellate in silenzio. Un valore di stato che non è né attuale né noto viene **rifiutato** (`--force` per procedere comunque): indovinare l'intenzione di un collega è come si perde una decisione. Il comando fa il backup da sé prima di scrivere.
+
 **Ogni settimana**
 
 1. **La ricerca.** Il giro è guidato da Claude Code, che legge A1–A4 e il Master. La parte meccanica è in `engine/`:
@@ -149,6 +158,7 @@ Un Master diverso = una cartella sincronizzata diversa (`--dir`) e il suo `histo
 - Oltre al numero di Tab, `stage` verifica che i **valori** stiano nella colonna
   giusta (insiemi chiusi di A4 e colonne data): una riga spostata di lato ha il
   numero di Tab corretto e passerebbe comunque.
+- `Contact Search Status` (in `Review.xlsx`) è l'asse con cui si colora **l'intera riga**: `Not started` bianco, `Job not suitable` grigio, `Potential contact` giallo, `Contact found` blu, `Job found` verde. Il bianco non ha una regola: è lo sfondo del foglio.
 - Notes: `[NEW COMPANY|UPDATE EXISTING ROW] [pertinente|adiacente] Match score: NN/100; motivo`.
 - Verification: `Employer verified active` / `Portal verified` / `Legacy result — recheck` / `Blocked — motivo` / `To verify — campo`.
 - Indeed riga obbligatoria `X = Y + Z + P`; connector assente → `Unavailable (motivo)`.
@@ -173,6 +183,9 @@ Nessuno di questi viene risolto automaticamente: servono i dati storici.
   `sync_export.py` la cita come autorità delle regole di colore
   (`COLOR_RULES_SPEC`). O si recepisce la proposta in A4, o il codice non deve
   dichiararsi vincolato a un documento non approvato. Decisione umana.
+- **Il vocabolario di `Contact Search Status` è cambiato in codice ma A4 porta
+  ancora i tre valori vecchi.** Finché i due non coincidono, `stage` rifiuta
+  ogni riga: è una modifica che va fatta e disfatta insieme.
 
 ## Test
 

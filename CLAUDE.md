@@ -187,9 +187,10 @@ Discovery adapters live in `src/discovery/`, each returning `Card[]` behind the 
 | Cohort constraints, `history_file` | `config/<Master> ED.NN>/A3-cohort.yaml` |
 | A new discovery source | `src/discovery/` + add to `tsconfig` `include` + a `test/*-smoke.mjs` appended to the `package.json` chain |
 | A canonical-history write rule | `python/add_verified.py` **and** `sync_export.py pull`/`backfill-ids` — all three write it |
-| The review columns colleagues see | `sync_export.py` → `REVIEW_COLUMNS`. **Changing it after `init-review` has run means migrating live data.** |
+| The review columns colleagues see | `sync_export.py` → `REVIEW_COLUMNS`, **then `migrate-review`** — `stage`/`append` write by POSITION from that list, so a change without a migration puts every later value in the wrong column. `migrate-review` carries cells by column name and takes its own backup. |
+| The colleague-facing status vocabulary | `CONTACT_STATUS_VALUES` in `sync_export.py` **and** A4 — `stage` refuses every row until the two agree. Old values go in `LEGACY_CONTACT_STATUS` so `migrate-review` can carry a live sheet across. |
 | The status colours | `sync_export.py` → `_install_color_rules`, then re-run `color` (idempotent) |
-| The status vocabulary itself | `config/A4-status-vocabulary.proposed.md` is a **proposal**; A4 is human-owned and unamended |
+| The status vocabulary itself | `config/A4-status-vocabulary.proposed.md` is a **proposal**; A4 is human-owned and unamended. Note the inconsistency: `sync_export.py` already cites it as the authority for the live colour rules. |
 
 Do not add a new config file per search run (A4) and do not create a second copy of A2/A3 content elsewhere.
 

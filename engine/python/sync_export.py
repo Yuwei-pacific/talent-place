@@ -105,8 +105,9 @@ COMPANY_SUMMARY_COLUMNS = A4_COLUMNS + ["Company ID", "Role Count (peak)"]
 # --------------------------------------------------------------------------
 # The human-facing workbook.
 #
-# 24 columns: the 22 A4 columns with `Notes` SPLIT into `Matching Notes`
-# (machine) and `Reviewer Notes` (human), plus `Company ID`.
+# The A4 columns with `Notes` SPLIT into `Matching Notes` (machine) and
+# `Reviewer Notes` (human), plus `Company ID`, minus the two A4 columns this
+# sheet does not render (see the note on REVIEW_COLUMNS below).
 #
 # The split is the point. `Notes` was the one column both sides wrote --
 # add_verified.py appended machine text to whatever a colleague had typed,
@@ -119,6 +120,17 @@ COMPANY_SUMMARY_COLUMNS = A4_COLUMNS + ["Company ID", "Role Count (peak)"]
 # diff instead of inside an opaque binary.
 # --------------------------------------------------------------------------
 
+# 22 columns. Two A4 columns are deliberately NOT rendered here:
+#
+#   Previously Contacted?  and  Outreach Decision
+#
+# Both stay in A4 and both stay in the TSV; this file simply stops showing them.
+# "Previously Contacted?" was never typed by a colleague -- its 14 `Yes` come
+# from the canonical CSV, and `stage` still copies it into the Company Summary
+# sheet, so dropping it from here costs the ability to EDIT it, not the value.
+# `Outreach Decision` was a constant in practice (179 `Review`, 1 `No`), and the
+# one real decision it carried is better expressed by the status vocabulary:
+# "No" is what "Job not suitable" now means.
 REVIEW_COLUMNS = [
     "Company / Outreach Account",
     "Brands / Business Units",
@@ -131,12 +143,10 @@ REVIEW_COLUMNS = [
     "Curricular Evidence",
     "Work Modes",
     "Sources / Portals",
-    "Previously Contacted?",
-    "Contact Search Status",
+    "Contact Search Status",  # the column the whole row is coloured by
     "Contact Name",
     "Contact Role",
     "Contact Email / LinkedIn",
-    "Outreach Decision",
     "Matching Notes",  # machine
     "Reviewer Notes",  # human
     "Verification Status",
@@ -147,8 +157,9 @@ REVIEW_COLUMNS = [
 ]
 
 REVIEW_BANNER = (
-    "Review file — this one is YOURS. Columns A-R are filled by the machine; "
-    "edit only Outreach Decision, Reviewer Notes, Contact * and the dates. "
+    "Review file — this one is YOURS. Columns A-K are filled by the machine; "
+    "edit Contact Search Status, Reviewer Notes, Contact * and the dates. "
+    "The whole row is coloured by Contact Search Status. "
     "Per-role evidence is in Roles.xlsx. Do not use modern Comments here: "
     "Excel's threaded comments are lost when the machine appends new rows."
 )
@@ -164,9 +175,13 @@ DATE_NUMBER_FORMAT = "DD/MM/YYYY"
 
 # Dropdowns, so colleagues pick a value instead of typing one.
 VALIDATION = {
-    "Outreach Decision": ["Review", "Yes", "No"],
-    "Contact Search Status": ["Not started", "Contacted", "No suitable contact"],
-    "Previously Contacted?": ["No", "Yes", "To verify"],
+    "Contact Search Status": [
+        "Not started",
+        "Job not suitable",
+        "Potential contact",
+        "Contact found",
+        "Job found",
+    ],
 }
 
 # Columns that exist per-role now but had NO home in the flat TSV, so no value
@@ -293,8 +308,31 @@ VERIFICATION_PREFIXES = (
     "Blocked",
     "To verify",
 )
+# A4's `Outreach Decision` still rides in the TSV (it is column 17 there) and is
+# still validated; it is only Review.xlsx that stops rendering it.
 DECISION_VALUES = {"Review", "Yes", "No"}
-CONTACT_STATUS_VALUES = {"Not started", "Contacted", "No suitable contact"}
+
+# The colleague-facing vocabulary, and the axis the whole row is coloured by.
+# Sentence case to match A4's own convention ("Not started", not "not started").
+# A4 still lists the old three -- this is a proposal until A4 is amended, and
+# `stage` refuses every row until the two agree, which is why they must change
+# together.
+CONTACT_STATUS_VALUES = {
+    "Not started",
+    "Job not suitable",
+    "Potential contact",
+    "Contact found",
+    "Job found",
+}
+
+# Statuses that existed before the vocabulary changed. Read only by
+# `migrate-review`, so an old sheet can be carried onto the new column set
+# without a human retyping 180 rows.
+LEGACY_CONTACT_STATUS = {
+    "Not started": "Not started",
+    "No suitable contact": "Job not suitable",
+    "Contacted": "Contact found",
+}
 
 
 def validate_rows(header: list[str], rows: list[list[str]]) -> list[str]:
@@ -940,25 +978,42 @@ def _install_color_rules(ws, columns: list[str]) -> list[str]:
         ws.conditional_formatting._cf_rules.pop(rng, None)
         return rng
 
-    # 1. Outreach Decision — the primary colour.
-    rng = clear("Outreach Decision")
-    q = ref("Outreach Decision", 2)
-    ws.conditional_formatting.add(
-        rng,
-        FormulaRule(
-            formula=[f'{q}="No"'],
-            fill=PatternFill("solid", bgColor="D9D9D9"),
-            font=Font(strike=True, color="808080"),
-            stopIfTrue=False,
-        ),
-    )
-    ws.conditional_formatting.add(
-        rng,
-        FormulaRule(formula=[f'{q}="Yes"'], fill=PatternFill("solid", bgColor="C6EFCE"), stopIfTrue=False),
-    )
-    applied.append(f"Outreach Decision: Yes=green, No=grey+strikethrough  [{rng}]")
+    # The whole row is coloured by Contact Search Status. One rule per
+    # coloured status, one shared anchor cell, nothing nested: the previous
+    # ruleset included a three-branch OR that detected a status/date
+    # contradiction, and simplifying it was an explicit ask.
+    #
+    # "Not started" gets no rule on purpose -- white is the sheet's own
+    # background, so the default needs no formula to maintain.
+    status_col = ref("Contact Search Status", 3)
+    status_letter = get_column_letter(columns.index("Contact Search Status") + 1)
+    row_range = f"A3:{get_column_letter(len(columns))}{CF_RANGE_ROWS}"
+    ws.conditional_formatting._cf_rules.pop(row_range, None)
 
-    # 2. Recall — due vs scheduled.
+    STATUS_FILLS = [
+        ("Job not suitable", "D9D9D9", "grey"),
+        ("Potential contact", "FFE699", "yellow"),
+        ("Contact found", "DDEBF7", "blue"),
+        ("Job found", "C6EFCE", "green"),
+    ]
+    for value, colour, name in STATUS_FILLS:
+        ws.conditional_formatting.add(
+            row_range,
+            FormulaRule(
+                formula=[f'${status_letter}3="{value}"'],
+                fill=PatternFill("solid", bgColor=colour),
+                stopIfTrue=False,
+            ),
+        )
+    applied.append(
+        "Contact Search Status: whole row A..{last} by status -- "
+        "Job not suitable=grey, Potential contact=yellow, Contact found=blue, "
+        "Job found=green, Not started=no fill  [{rng}]".format(
+            last=get_column_letter(len(columns)), rng=row_range
+        )
+    )
+
+    # Recall — due vs scheduled. Unchanged.
     rng = clear("Recall")
     w = ref("Recall", 2)
     ws.conditional_formatting.add(
@@ -971,38 +1026,18 @@ def _install_color_rules(ws, columns: list[str]) -> list[str]:
     )
     applied.append(f"Recall: due=orange, scheduled=teal  [{rng}]")
 
-    # 3. Contact Search Status — the INCONSISTENT worklist.
-    # 48 of 118 canonical rows currently contradict themselves (a status of
-    # "Not started" alongside a contact date). Colouring it amber turns an
-    # existing data-quality problem into a list that shortens itself as
-    # colleagues clean it up, at zero cost to the machine.
-    rng = clear("Contact Search Status")
-    m = ref("Contact Search Status", 2)
-    v = ref("First Contact Date", 2)
-    inconsistent = (
-        f'OR(AND({m}="Not started",{v}<>""),'
-        f'AND({m}="No suitable contact",{v}<>""),'
-        f'AND({m}="Contacted",{v}=""))'
-    )
-    ws.conditional_formatting.add(
-        rng,
-        FormulaRule(formula=[inconsistent], fill=PatternFill("solid", bgColor="FFE699"), stopIfTrue=False),
-    )
-    applied.append(f"Contact Search Status: inconsistent-with-date=amber  [{rng}]")
-
     return applied
 
 
-def _build_review_workbook(path: Path, canon) -> int:
-    """Create Review.xlsx, seeded from canonical history. Returns rows written."""
-    from openpyxl import Workbook
+def _write_review_header(ws) -> None:
+    """Banner, header row and column widths.
+
+    Shared by `init-review` and `migrate-review` on purpose: two copies of this
+    block would drift, and a migrated file that does not look like a fresh one
+    is how a colleague concludes the machine broke something.
+    """
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
-    from openpyxl.worksheet.datavalidation import DataValidation
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Review"
 
     ncols = len(REVIEW_COLUMNS)
     ws.cell(1, 1, REVIEW_BANNER).font = Font(bold=True, color="FFFFFF")
@@ -1016,6 +1051,34 @@ def _build_review_workbook(path: Path, canon) -> int:
         cell.fill = PatternFill("solid", fgColor="F2F2F2")
         cell.alignment = Alignment(vertical="top", wrap_text=True)
         ws.column_dimensions[get_column_letter(c)].width = min(max(len(name) + 2, 12), 38)
+
+
+def _apply_review_validation(ws) -> None:
+    """Dropdowns, so colleagues pick a value instead of typing one."""
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    for col_name, options in VALIDATION.items():
+        dv = DataValidation(
+            type="list",
+            formula1='"' + ",".join(options) + '"',
+            allow_blank=True,
+            showDropDown=False,
+        )
+        ws.add_data_validation(dv)
+        letter = get_column_letter(REVIEW_COLUMNS.index(col_name) + 1)
+        dv.add(f"{letter}3:{letter}{CF_RANGE_ROWS}")
+
+def _build_review_workbook(path: Path, canon) -> int:
+    """Create Review.xlsx, seeded from canonical history. Returns rows written."""
+    from openpyxl import Workbook
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Review"
+    ncols = len(REVIEW_COLUMNS)
+    _write_review_header(ws)
 
     row = 3
     for cr in canon.rows:
@@ -1035,16 +1098,7 @@ def _build_review_workbook(path: Path, canon) -> int:
             ws.cell(row, c, value if value not in (None, "") else None)
         row += 1
 
-    for col_name, options in VALIDATION.items():
-        dv = DataValidation(
-            type="list",
-            formula1='"' + ",".join(options) + '"',
-            allow_blank=True,
-            showDropDown=False,
-        )
-        ws.add_data_validation(dv)
-        letter = get_column_letter(REVIEW_COLUMNS.index(col_name) + 1)
-        dv.add(f"{letter}3:{letter}{CF_RANGE_ROWS}")
+    _apply_review_validation(ws)
 
     ws.freeze_panes = "C3"
     ws.auto_filter.ref = f"A2:{get_column_letter(ncols)}{max(row - 1, 2)}"
@@ -1131,6 +1185,151 @@ def cmd_init_review(args: argparse.Namespace) -> int:
         )
         summary["unparseable_dates"] = bad_dates
     print(json.dumps(summary, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_migrate_review(args: argparse.Namespace) -> int:
+    """Rebuild Review.xlsx onto the current REVIEW_COLUMNS.
+
+    Needed because `init-review` refuses to overwrite a file that holds
+    colleague edits, and `stage`/`append` write into the sheet at POSITIONS
+    taken from REVIEW_COLUMNS. Change that list without this and every value
+    after the change lands in the wrong column.
+
+    Every cell is carried across BY COLUMN NAME, so a column that moves, is
+    added, or is dropped does not shift anything. A column that no longer
+    exists is reported rather than silently discarded, and a status value that
+    is neither current nor in LEGACY_CONTACT_STATUS is reported and left as it
+    is -- guessing at a colleague's intent is how a decision gets lost.
+    """
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.utils import get_column_letter
+
+    d = Path(args.dir)
+    target = d / "Review.xlsx"
+    source = Path(args.source) if args.source else target
+    if not source.exists():
+        print(json.dumps({"ok": False, "error": f"{source} does not exist"}, ensure_ascii=False))
+        return 2
+
+    old_wb = load_workbook(source, rich_text=True)
+    old_ws = old_wb["Review"] if "Review" in old_wb.sheetnames else old_wb.active
+    old_header = [old_ws.cell(2, c).value for c in range(1, old_ws.max_column + 1)]
+    if not old_header or old_header[0] != REVIEW_COLUMNS[0]:
+        print(json.dumps({"ok": False, "error": f"{source} row 2 does not look like a Review header"}, ensure_ascii=False))
+        return 2
+
+    carried = [c for c in REVIEW_COLUMNS if c in old_header]
+    added = [c for c in REVIEW_COLUMNS if c not in old_header]
+    dropped = [c for c in old_header if c and c not in REVIEW_COLUMNS]
+
+    # Snapshot every row before touching anything: `write_atomically` replaces
+    # the file, and reading from the same handle afterwards would read the new one.
+    data = [
+        [old_ws.cell(r, c).value for c in range(1, old_ws.max_column + 1)]
+        for r in range(3, old_ws.max_row + 1)
+    ]
+    data = [row for row in data if row and str(row[0] or "").strip()]
+
+    i_status = old_header.index("Contact Search Status") if "Contact Search Status" in old_header else None
+    translated: dict[str, int] = {}
+    unknown: dict[str, int] = {}
+    if i_status is not None:
+        for row in data:
+            raw = row[i_status]
+            if raw in (None, ""):
+                continue
+            value = str(raw).strip()
+            if value in CONTACT_STATUS_VALUES:
+                continue
+            if value in LEGACY_CONTACT_STATUS:
+                translated[value] = translated.get(value, 0) + 1
+            else:
+                unknown[value] = unknown.get(value, 0) + 1
+
+    if unknown and not args.force:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "reason": "unmapped_status",
+                    "error": "some Contact Search Status values are neither current nor known-legacy. "
+                    "Migrating would leave them as-is under a new vocabulary. Add them to "
+                    "LEGACY_CONTACT_STATUS or fix them first, then re-run.",
+                    "unmapped": unknown,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 2
+
+    def apply(tmp: Path) -> None:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Review"
+        _write_review_header(ws)
+        for i, row in enumerate(data):
+            out_row = 3 + i
+            for c, name in enumerate(REVIEW_COLUMNS, start=1):
+                if name not in old_header:
+                    continue
+                value = row[old_header.index(name)]
+                if name == "Contact Search Status" and value not in (None, ""):
+                    value = LEGACY_CONTACT_STATUS.get(str(value).strip(), value)
+                ws.cell(out_row, c, value if value not in (None, "") else None)
+                if name in DATE_COLUMNS and isinstance(value, datetime):
+                    ws.cell(out_row, c).number_format = DATE_NUMBER_FORMAT
+        _apply_review_validation(ws)
+        _install_color_rules(ws, REVIEW_COLUMNS)
+        ws.freeze_panes = "C3"
+        ws.auto_filter.ref = f"A2:{get_column_letter(len(REVIEW_COLUMNS))}{max(3 + len(data) - 1, 2)}"
+        wb.save(tmp)
+
+    if args.dry_run:
+        print(
+            json.dumps(
+                {
+                    "dry_run": True,
+                    "source": str(source),
+                    "target": str(target),
+                    "rows": len(data),
+                    "columns_carried": carried,
+                    "columns_added": added,
+                    "columns_dropped": dropped,
+                    "status_translated": translated,
+                    "unmapped_status": unknown,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+
+    synced_fs.write_atomically(
+        target,
+        apply,
+        allow_hydrate=args.allow_hydrate,
+        backup_dir=d / "_machine" / "backups",
+    )
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "source": str(source),
+                "target": str(target),
+                "rows": len(data),
+                "columns_carried": len(carried),
+                "columns_added": added,
+                "columns_dropped": dropped,
+                "status_translated": translated,
+                "unmapped_status": unknown,
+                "backup_dir": str(d / "_machine" / "backups"),
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 
@@ -1638,6 +1837,12 @@ def main() -> int:
         ("append", cmd_append, "append genuinely-new companies to Review.xlsx (guarded, append-only)", False),
         ("harvest", cmd_harvest, "report what colleagues decided (read-only)", True),
         ("pull", cmd_pull, "write colleagues' decisions back into the canonical CSV", True),
+        (
+            "migrate-review",
+            cmd_migrate_review,
+            "rebuild Review.xlsx onto the current REVIEW_COLUMNS, carrying every cell by column name",
+            False,
+        ),
     ]:
         q = sub.add_parser(name, help=helptext)
         q.add_argument("--dir", required=True)
@@ -1650,6 +1855,9 @@ def main() -> int:
             q.add_argument("--force", action="store_true", help="overwrite an existing Review.xlsx")
         if name == "append":
             q.add_argument("--run-id", help="defaults to the latest run in _machine/last-run.json")
+        if name == "migrate-review":
+            q.add_argument("--from", dest="source", help="read the old sheet from here instead (e.g. a backup)")
+            q.add_argument("--force", action="store_true", help="migrate even if some status values are unmapped")
         if name == "harvest":
             q.add_argument("--verbose", action="store_true")
         if name == "pull":
