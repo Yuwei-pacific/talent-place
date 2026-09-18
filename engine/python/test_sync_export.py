@@ -57,6 +57,10 @@ from reconcile import (  # noqa: E402
 
 REPO = HERE.parent.parent
 CANONICAL = REPO / "index" / "Strategic_Design_Company_Index.csv"
+# Sample TSVs live with the other test data, not in outputs/: they are FIXTURES,
+# and a fixture filed under a directory called "outputs" reads as discardable.
+# Measured: deleting them turns 6 tests into skips while the suite still says OK.
+FIXTURES = HERE.parent / "test" / "fixtures"
 ENGINE = HERE.parent
 TS_LIB = ENGINE / "lib" / "normalize.js"
 
@@ -616,8 +620,8 @@ class TestColumnOwnership(unittest.TestCase):
 class TestStage(TmpDirCase):
     # 09-11 is the shifted file and 09-10 the short one; neither satisfies A4, so
     # the happy-path tests use 09-10 with its rows padded to the header width.
-    TSV = REPO / "outputs" / "output-2026-09-11.tsv"
-    CLEAN_SOURCE = REPO / "outputs" / "output-2026-09-10.tsv"
+    TSV = FIXTURES / "tsv-shifted-2026-09-11.tsv"
+    CLEAN_SOURCE = FIXTURES / "tsv-short-2026-09-10.tsv"
 
     def clean_tsv_text(self) -> str:
         rows = list(csv.reader(io.StringIO(self.CLEAN_SOURCE.read_text(encoding="utf-8")), delimiter="\t"))
@@ -962,7 +966,7 @@ class TestRowValidation(TmpDirCase):
         self.assertEqual(validate_rows(hdr, rows), [])
 
     def test_shift_detected_even_though_the_tab_count_is_correct(self):
-        """This is output-2026-09-11.tsv: values right, count right, columns wrong."""
+        """This is the 09-11 fixture: values right, count right, columns wrong."""
         def shift(r):
             out = [""] * len(r)
             out[16] = ""
@@ -1010,8 +1014,8 @@ class TestRowValidation(TmpDirCase):
 
 
 class TestStageRefusesMalformed(unittest.TestCase):
-    TSV_0910 = REPO / "outputs" / "output-2026-09-10.tsv"
-    TSV_0911 = REPO / "outputs" / "output-2026-09-11.tsv"
+    TSV_0910 = FIXTURES / "tsv-short-2026-09-10.tsv"
+    TSV_0911 = FIXTURES / "tsv-shifted-2026-09-11.tsv"
 
     def run_stage(self, tsv, *extra):
         return subprocess.run(

@@ -33,7 +33,7 @@ talent-place/
 │   │   ├── synced_fs.py         # guardie di scrittura sul mount OneDrive
 │   │   └── add_verified.py      # righe confermate -> CSV canonico
 │   └── package.json (npm test)
-├── outputs/                     # output-YYYY-MM-DD.tsv per ogni ricerca
+├── outputs/                     # output-YYYY-MM-DD.tsv per ogni ricerca (solo questo)
 └── index/
     ├── Strategic_Design_Company_Index.csv   # canonical history
     ├── Accessory_Design_Company_Index.csv   # canonical history (nuovo Master)
@@ -154,8 +154,12 @@ Un Master diverso = una cartella sincronizzata diversa (`--dir`) e il suo `histo
 - Output TSV con Tab reali, 22 colonne; `First Contact Date`/`Recall` vuoti sui nuovi.
   **Ogni riga deve avere esattamente lo stesso numero di Tab dell'header**, usando
   campi vuoti per le colonne senza valore: non omettere i Tab finali e non
-  inserirne a metà riga. Entrambi i TSV storici in `outputs/` violano questa
-  regola, in due modi diversi, e `stage` li rifiuta entrambi.
+  inserirne a metà riga. I due campioni in `engine/test/fixtures/` violano questa
+  regola in due modi diversi (`tsv-short-2026-09-10.tsv` è corto di due colonne,
+  `tsv-shifted-2026-09-11.tsv` ha la coda spostata di +2) e `stage` li rifiuta
+  entrambi. Sono la prova che `stage` rifiuta input sbagliati: **cancellarli fa
+  diventare 6 test degli skip mentre la suite continua a dire OK** (misurato; la
+  documentazione precedente diceva tre).
 - Oltre al numero di Tab, `stage` verifica che i **valori** stiano nella colonna
   giusta (insiemi chiusi di A4 e colonne data): una riga spostata di lato ha il
   numero di Tab corretto e passerebbe comunque.

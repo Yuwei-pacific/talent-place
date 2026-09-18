@@ -127,9 +127,10 @@ delegating**, by path. A polling loop whose subject was never promised is a
 timer, not a wait.
 
 **A run is not finished until its output is somewhere durable.** The TSV belongs
-in `outputs/output-YYYY-MM-DD.tsv` (see the note in `outputs/` history: both
-shipped TSVs are refused by `stage`, so match the column contract, not the
-files). A run left in `/tmp` is a run that will be wiped. A4 allows either
+in `outputs/output-YYYY-MM-DD.tsv`. `outputs/` now holds run output and nothing
+else — the two historical TSVs that used to live there were FIXTURES and moved to
+`engine/test/fixtures/`, because a fixture filed under a directory called
+"outputs" reads as discardable. A run left in `/tmp` is a run that will be wiped. A4 allows either
 naming an output directory or declaring in the reply that nothing external was
 saved — **at least one of the two must happen**, and silence does neither.
 
@@ -174,7 +175,7 @@ Discovery adapters live in `src/discovery/`, each returning `Card[]` behind the 
 - **`lib/` is gitignored build output that the tests import.** A fresh clone must `npm install` before anything runs, and editing `src/` without rebuilding leaves tests running the old code — this is why `npm test` runs `build` first.
 - Imports use NodeNext ESM, so intra-repo specifiers end in `.js` even in `.ts` files (`from './types.js'`).
 - The canonical CSV is **semicolon**-delimited; TSV output is **tab**-delimited. `index/Strategic_Design_Company_Index.csv` carries 38 physical header cells but only the first 23 are real (the 22 A4 columns plus `Company ID`); the rest are empty columns inherited from the original xlsx export — don't treat them as real. `pull` appends a `Reviewer Notes` column the first time it has a colleague's note to store.
-- In the TSV, columns 1–20 are mandatory; 21–22 (`First Contact Date`, `Recall`) are production extensions: leave empty for new roles, but preserve them when updating an existing row. **Every row must have exactly as many tabs as the header, using empty fields for columns with no value** — neither omitting trailing tabs nor inserting blanks mid-row. Both historical `outputs/*.tsv` files violate this, in two different ways (one is short by two columns, the other has its tail shifted +2), and `stage` refuses both.
+- In the TSV, columns 1–20 are mandatory; 21–22 (`First Contact Date`, `Recall`) are production extensions: leave empty for new roles, but preserve them when updating an existing row. **Every row must have exactly as many tabs as the header, using empty fields for columns with no value** — neither omitting trailing tabs nor inserting blanks mid-row. The two fixtures in `engine/test/fixtures/` violate this in two different ways — `tsv-short-2026-09-10.tsv` is short by two columns, `tsv-shifted-2026-09-11.tsv` has its tail shifted +2 — and `stage` refuses both. They are what proves `stage` refuses bad input, so deleting them turns **6 tests into skips while the suite still reports OK** (measured; the older docs here said three).
 - **The tab-count rule alone is not enough.** A row shifted sideways still has the right count. `stage` also validates values against A4's closed sets (`Verification Status` prefixes, `Outreach Decision`, `Contact Search Status`) and against the date columns; `--lenient` overrides and records the problems in the run manifest.
 - **Multi-value cells need a per-column separator policy, not one splitter.** `Work Modes` legitimately contains `;` *inside* a single value (`"Physical location shown; onsite/hybrid status to verify"`, 50 rows), so a universal `;` split shreds it. `reconcile.MULTI_VALUE_SPEC` holds the policy; `Work Modes` has `semicolon: false`.
 - **Dates must be written as real dates, never text.** A conditional-formatting formula like `$W2<=TODAY()` compares *strings* against `"03/09/2026"` and silently returns the wrong answer while the cell still looks right. `doctor` asserts the date columns actually hold dates.

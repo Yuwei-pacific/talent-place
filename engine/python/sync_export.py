@@ -339,7 +339,8 @@ def validate_rows(header: list[str], rows: list[list[str]]) -> list[str]:
     """Check each row's values against the closed sets and types A4 defines for
     those columns.
 
-    Motivated by a real case: `outputs/output-2026-09-11.tsv` has all six rows
+    Motivated by a real case: `engine/test/fixtures/tsv-shifted-2026-09-11.tsv`
+    has all six rows
     shifted +2 from column 16, so `Verification Status` holds 'Review' (a
     decision), `Last Checked` holds the Notes prose, and `First Contact Date`
     holds the verification text. The tab count is a correct 22, so the A4
