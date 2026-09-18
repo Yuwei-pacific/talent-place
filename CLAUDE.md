@@ -142,7 +142,7 @@ saved — **at least one of the two must happen**, and silence does neither.
 | `A3-cohort.yaml` | Student constraints, preferences, `history_file` pointer | one per edition |
 | `A4-regole-registrazione.md` | Output format: TSV columns, Notes, Verification Status, Indeed accounting | all Masters |
 
-`config/` holds **agent inputs only** — A1, A4, and one A2/A3 pair per Master. The human-facing guide (how we work, who maintains what, the weekly flow) is `README.md` at the repo root and is **not** an agent input; it used to live in `config/` as `00-Talent placement&Design lab.md` and was moved out so the invariant above is checkable rather than aspirational.
+`config/` holds **agent inputs only** — A1, A4, and one A2/A3 pair per Master. Closed proposals and retired documents live in `archive/`, so the invariant above is checkable by listing one directory rather than by judgement. The human-facing guide (how we work, who maintains what, the weekly flow) is `README.md` at the repo root and is **not** an agent input; it used to live in `config/` as `00-Talent placement&Design lab.md` and was moved out so the invariant above is checkable rather than aspirational.
 
 Precedence: A1 sets method, A2 sets the educational perimeter, A3 sets student conditions, A4 sets output. **A3 preferences never rewrite A2's perimeter.** A2 `master_id` must match A3's and the requested Master — if they disagree or one is missing, stop and ask rather than substituting a Master by analogy.
 
@@ -191,7 +191,7 @@ Discovery adapters live in `src/discovery/`, each returning `Card[]` behind the 
 | The review columns colleagues see | `sync_export.py` → `REVIEW_COLUMNS`, **then `migrate-review`** — `stage`/`append` write by POSITION from that list, so a change without a migration puts every later value in the wrong column. `migrate-review` carries cells by column name and takes its own backup. |
 | The colleague-facing status vocabulary | `CONTACT_STATUS_VALUES` in `sync_export.py` **and** A4 — `stage` refuses every row until the two agree. Old values go in `LEGACY_CONTACT_STATUS` so `migrate-review` can carry a live sheet across. |
 | The status colours | `sync_export.py` → `_install_color_rules`, then re-run `color` (idempotent) |
-| The status vocabulary itself | `config/A4-regole-registrazione.md`, sezione «Contatti e decisioni». `A4-status-vocabulary.proposed.md` is **closed** — its Modifica 1 was already in force, its Modifica 2 (a status *derived* in Excel) was superseded by the stored 5-value vocabulary. The `COLOR_RULES_SPEC` string still names that file; the authority is A4. |
+| The status vocabulary itself | `config/A4-regole-registrazione.md`, sezione «Contatti e decisioni» — that is the authority. The proposal that preceded it is **closed** and lives in `archive/2026-09-16-status-vocabulary-proposal.md`: its Modifica 1 was already in force, and its Modifica 2 (a status *derived* in Excel) was superseded by the stored 5-value vocabulary. Read it for the reasoning behind rejected alternatives, not for rules. |
 
 Do not add a new config file per search run (A4) and do not create a second copy of A2/A3 content elsewhere.
 

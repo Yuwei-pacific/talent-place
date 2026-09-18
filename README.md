@@ -12,11 +12,12 @@ talent-place/
 ├── config/                      # solo input dell'agent
 │   ├── A1-regole-ricerca.md               # comune a tutti i Master
 │   ├── A4-regole-registrazione.md         # comune a tutti i Master
-│   ├── A4-status-vocabulary.proposed.md   # PROPOSTA di modifica ad A4, non applicata
 │   ├── Strategic design ED.28/
 │   │   ├── A2-profilo-strategic-design.md # uno per Master
 │   │   └── A3-cohort.yaml                 # uno per edizione (history_file -> ../../index/..csv)
 │   └── Accessory design ED.14/            # stesso schema
+├── archive/                     # documenti chiusi/ritirati (non input dell'agent)
+│   └── 2026-09-16-status-vocabulary-proposal.md  # chiusa: esito in testa, testo come traccia
 ├── engine/                      # job-engine
 │   ├── src/
 │   │   ├── cli.ts               # `discover` (ricerca) e `verify` (sito datore)
@@ -179,10 +180,11 @@ Nessuno di questi viene risolto automaticamente: servono i dati storici.
   successiva o testo di intestazione. Segnalate da `doctor` e da `init-review`.
 - **`Moncler Group`** (da un giro) contro **`Moncler`** (canonical): stessa
   azienda? Si decide in `index/company-aliases.csv`, non con una euristica.
-- *(risolto il 2026-09-18)* `A4-status-vocabulary.proposed.md` è **chiusa**: la
-  Modifica 1 era già in vigore, la Modifica 2 (stato derivato) è stata superata
-  dalla scelta di uno stato memorizzato. Il vocabolario sta ora in A4, e il file
-  conserva l'esito in testa.
+- *(risolto il 2026-09-18)* La proposta sul vocabolario è **chiusa** e spostata in
+  `archive/2026-09-16-status-vocabulary-proposal.md`: la Modifica 1 era già in
+  vigore, la Modifica 2 (stato derivato) è stata superata dalla scelta di uno
+  stato memorizzato. Il vocabolario sta ora in A4. Il file resta per il
+  ragionamento sulle alternative scartate, non per le regole.
 
 ## Test
 
