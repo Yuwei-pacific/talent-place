@@ -9,7 +9,7 @@ Internship-search system for POLI.design Master's programmes. Two halves that mu
 - **`config/`** — the method (A1–A4) plus one profile per Master. Markdown/YAML, written in Italian, read by a human and by Claude during a search run. **This is the behavioural source of truth.**
 - **`engine/`** — a TypeScript library of deterministic helpers (normalization, geo filtering, prefiltering, dedup, history lookup) plus two Python CLIs:
   - `python/sync_export.py` — publishes a run into a synced SharePoint folder, and reads colleagues' decisions back out
-  - `python/add_verified.py` — appends human-confirmed TSV rows to the canonical CSV
+  - `python/sync_export.py export-history` — renders a Master's `Review.xlsx` into the CSV a run dedups against
 
 **No CLI runs a search.** A search run is *Claude Code itself* reading A1–A4 + the Master's A2/A3 and emitting a TSV, calling engine helpers and doing web fetches as it goes. `sync_export.py` is the **publishing** half: it takes the TSV that a run produced and puts it where colleagues can review it. It does not discover anything.
 
@@ -32,11 +32,11 @@ A run's TSV is the **input contract for `stage`**, not a deliverable. Producing 
 Command order for a weekly run:
 
 ```
-doctor       verify the target dir (sync mount? dataless? Excel lock?)
-stage        TSV -> Roles.xlsx + _machine/*.csv        (never touches Review.xlsx)
-append       add genuinely-new companies to Review.xlsx
-harvest      report what colleagues decided            (read-only audit)
-pull         write their decisions into the canonical CSV
+doctor         verify the target dir (sync mount? dataless? Excel lock?)
+export-history Review.xlsx -> the CSV a run dedups against   (read-only)
+stage          TSV -> Roles.xlsx + _machine/*.csv   (never touches Review.xlsx)
+append         add genuinely-new companies to Review.xlsx
+harvest        report what colleagues decided        (read-only audit)
 ```
 
 `init-review` (create `Review.xlsx`), `color` (install the status rules) and `backfill-ids` (add the `Company ID` column) are one-time setup.
@@ -156,7 +156,7 @@ These are A1/A4 rules expressed as code. Changing one means changing a rule, so 
 
 - **No label or score without a read description.** `labels.ts::decisionToA1` returns `non_risolto` when no reliable description exists, even if a score was passed. Score 0–100 is optional and only ever orders results; the qualitative label (`pertinente` / `adiacente` / `fuori profilo`) is what carries meaning.
 - **Only `pertinente` and `adiacente` reach the main TSV.** `fuori profilo` goes to exclusions; unreliable ones go to unresolved.
-- **Three writers touch the canonical CSV; `history.ts` only reads it.** `add_verified.py` (human-confirmed rows), `sync_export.py backfill-ids` (one-time column add) and `sync_export.py pull` (colleagues' decisions out of `Review.xlsx`). Each takes a pre-write backup, and `pull` *reports* an overwrite of a non-empty value instead of doing it silently.
+- **`Review.xlsx` is the record; nothing is synced into a second one.** Until 2026-09-18 a canonical CSV sat beside it and three commands wrote into it (`add_verified.py`, `pull`, `backfill-ids`). `pull` and `add_verified.py` are gone: their whole job was to carry colleagues' decisions from Review into the canonical, which is redundant when Review *is* the record. The canonical was archived the same day after it was measured 62 companies stale. `backfill-ids` survives but has no canonical to point at — see the open question in its section below.
 - **Column ownership is data, not a comment.** `reconcile.py` declares `HUMAN_COLS`, `MACHINE_UNION_COLS`, `MACHINE_LATEST_COLS`. A column cannot be in two sets, and tests assert that.
 - **The Python and TypeScript implementations must agree.** `reconcile.py` and `normalize.ts` both read the canonical CSV, so `MULTI_VALUE_SPEC` and `norm_company` are asserted equal across the two languages in `test_sync_export.py`. Two readers disagreeing about one file was a real bug.
 - **Column identity vs. date-ness are different axes.** `DATE_COLUMNS` spans both owners — `Last Checked` is machine-owned while `First Contact Date`/`Recall` are human-owned. Blanking every date column when appending silently drops the run date.
@@ -177,7 +177,7 @@ Discovery adapters live in `src/discovery/`, each returning `Card[]` behind the 
 - **`tsconfig.json` `include` is an explicit allowlist, not a glob.** A new `src/*.ts` file will silently not compile until it is added there. The existing `include` is the authoritative list of live modules.
 - **`lib/` is gitignored build output that the tests import.** A fresh clone must `npm install` before anything runs, and editing `src/` without rebuilding leaves tests running the old code — this is why `npm test` runs `build` first.
 - Imports use NodeNext ESM, so intra-repo specifiers end in `.js` even in `.ts` files (`from './types.js'`).
-- The canonical CSV is **semicolon**-delimited; TSV output is **tab**-delimited. The archived `archive/Strategic_Design_Company_Index.csv` carries 38 physical header cells but only the first 23 are real (the 22 A4 columns plus `Company ID`); the rest are empty columns inherited from the original xlsx export — don't treat them as real. `pull` appends a `Reviewer Notes` column the first time it has a colleague's note to store.
+- The CSV formats: the canonical/exported history is **semicolon**-delimited; TSV output is **tab**-delimited. The archived `archive/Strategic_Design_Company_Index.csv` carries 38 physical header cells but only the first 23 are real (the 22 A4 columns plus `Company ID`); the rest are empty columns inherited from the original xlsx export — don't treat them as real. `export-history` writes exactly `A4_COLUMNS + ["Company ID"]`.
 - **Where the history comes from (changed 2026-09-18).** `index/` is archived. The run dedups against `Review.xlsx` via `sync_export.py export-history --dir <Master> --out <csv>`, because that is the record colleagues actually maintain: measured that day, the canonical had gone 62 companies stale (118 against Review's 180) and deduping a run against it re-proposed **76 roles that had just been published**. `A3.history_file` points at the Master's `Review.xlsx`.
 - In the TSV, columns 1–20 are mandatory; 21–22 (`First Contact Date`, `Recall`) are production extensions: leave empty for new roles, but preserve them when updating an existing row. **Every row must have exactly as many tabs as the header, using empty fields for columns with no value** — neither omitting trailing tabs nor inserting blanks mid-row. The two fixtures in `engine/test/fixtures/` violate this in two different ways — `tsv-short-2026-09-10.tsv` is short by two columns, `tsv-shifted-2026-09-11.tsv` has its tail shifted +2 — and `stage` refuses both. They are what proves `stage` refuses bad input, so deleting them turns **6 tests into skips while the suite still reports OK** (measured; the older docs here said three).
 - **The tab-count rule alone is not enough.** A row shifted sideways still has the right count. `stage` also validates values against A4's closed sets (`Verification Status` prefixes, `Outreach Decision`, `Contact Search Status`) and against the date columns; `--lenient` overrides and records the problems in the run manifest.
@@ -192,7 +192,7 @@ Discovery adapters live in `src/discovery/`, each returning `Card[]` behind the 
 | A Master's professional areas | `config/<Master> ED.NN>/A2-profilo-*.md` |
 | Cohort constraints, `history_file` | `config/<Master> ED.NN>/A3-cohort.yaml` |
 | A new discovery source | `src/discovery/` + add to `tsconfig` `include` + a `test/*-smoke.mjs` appended to the `package.json` chain |
-| A canonical-history write rule | `python/add_verified.py` **and** `sync_export.py pull`/`backfill-ids` — all three write it |
+| Where a run reads its history | `sync_export.py` → `cmd_export_history`; the run passes the CSV to `discover --history`. `A3.history_file` names the workbook it comes from. |
 | The review columns colleagues see | `sync_export.py` → `REVIEW_COLUMNS`, **then `migrate-review`** — `stage`/`append` write by POSITION from that list, so a change without a migration puts every later value in the wrong column. `migrate-review` carries cells by column name and takes its own backup. |
 | The colleague-facing status vocabulary | `CONTACT_STATUS_VALUES` in `sync_export.py` **and** A4 — `stage` refuses every row until the two agree. Old values go in `LEGACY_CONTACT_STATUS` so `migrate-review` can carry a live sheet across. |
 | The status colours | `sync_export.py` → `_install_color_rules`, then re-run `color` (idempotent) |

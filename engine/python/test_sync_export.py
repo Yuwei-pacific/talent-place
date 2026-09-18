@@ -593,7 +593,7 @@ class TestColumnOwnership(unittest.TestCase):
         human, machine = set(HUMAN_COLS), set(MACHINE_UNION_COLS) | set(MACHINE_LATEST_COLS)
         self.assertEqual(human & machine, set(), "a column cannot be owned by both")
 
-    def test_the_columns_add_verified_refuses_are_all_declared_human(self):
+    def test_the_human_owned_columns_are_all_declared_human(self):
         for col in (
             "Previously Contacted?",
             "Contact Search Status",
@@ -735,7 +735,7 @@ class TestBackfillIds(TmpDirCase):
             self.assertTrue(b[idx].strip(), f"row {i} got no id")
 
     def test_positional_prefix_is_preserved(self):
-        """add_verified.py builds each appended row from `hdr[:len(header)]`, so
+        """A row appended by the machine is built from `hdr[:len(header)]`, so
         the first 22 columns must stay the A4 columns in order: `Recall` at 21."""
         p = self.make_csv([self.row("Alpha")])
         self.run_backfill(p)
@@ -1236,9 +1236,11 @@ class TestAppend(TmpDirCase):
         self.assertTrue((self.tmp / f"Review-additions-{run}.csv").exists(), "sidecar must be written")
 
 
-class TestHarvestAndPull(TmpDirCase):
-    """The loop back: colleagues' decisions reach the canonical CSV without a
-    human running add_verified.py, and nothing is overwritten silently."""
+class TestHarvest(TmpDirCase):
+    """What colleagues decided, read back out of Review.xlsx — read-only.
+
+    There is no longer a canonical CSV to write into: Review.xlsx IS the record,
+    and `sync_export.py export-history` is how the run reads it."""
 
     def make_canon(self, rows):
         p = self.tmp / "canon.csv"
@@ -1290,48 +1292,12 @@ class TestHarvestAndPull(TmpDirCase):
         self.assertEqual(out["conflicts"], 0, "the same date must not read as a conflict")
         self.assertEqual(out["updates"], 0, "nothing changed, so nothing to write")
 
-    def test_a_real_change_is_reported_as_a_conflict_and_written(self):
-        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa", status="Not started")])
-        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Contact Search Status": "Job found"})])
-        h = json.loads(self.run_("harvest", canon).stdout)
-        self.assertEqual(h["conflicts"], 1)
-        self.assertEqual(len(h["conflict_detail"]), 1)
-        self.assertEqual(h["conflict_detail"][0]["canonical"], "Not started")
-        self.assertEqual(h["conflict_detail"][0]["review"], "Job found")
-
-        p = self.run_("pull", canon, "--report", str(self.tmp / "c.csv"))
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        out = json.loads(p.stdout)
-        self.assertEqual(out["cells_updated"], 1)
-        rows = list(csv.reader(io.StringIO(canon.read_text(encoding="utf-8")), delimiter=";"))
-        self.assertEqual(rows[1][A4_COLUMNS.index("Contact Search Status")], "Job found")
-        self.assertTrue((self.tmp / "c.csv").exists(), "the conflict report must be written")
-
-    def test_pull_preserves_the_cells_existing_date_convention(self):
-        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa", contacted="03/09/2026")])
-        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"First Contact Date": datetime(2026, 9, 20)})])
-        self.run_("pull", canon)
-        rows = list(csv.reader(io.StringIO(canon.read_text(encoding="utf-8")), delimiter=";"))
-        got = rows[1][A4_COLUMNS.index("First Contact Date")]
-        self.assertEqual(got, "20/09/2026", "must keep DD/MM/YYYY, not switch the cell to ISO")
-
     def test_harvest_never_writes(self):
         canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
         before = canon.read_bytes()
         self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Contact Search Status": "Contact found"})])
         self.run_("harvest", canon)
         self.assertEqual(canon.read_bytes(), before, "harvest is the audit path: read-only")
-
-    def test_pull_dry_run_writes_nothing(self):
-        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
-        before = canon.read_bytes()
-        # The value has to DIFFER from the canonical, or there is nothing to
-        # write and the test would pass for the wrong reason.
-        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Contact Search Status": "Job found"})])
-        out = json.loads(self.run_("pull", canon, "--dry-run").stdout)
-        self.assertTrue(out["dry_run"])
-        self.assertEqual(out["cells_updated"], 1)
-        self.assertEqual(canon.read_bytes(), before)
 
     def test_shared_company_id_is_ambiguous_not_silently_first_wins(self):
         """The 5 duplicate names share a proposed id. Collapsing them to one row
@@ -1345,33 +1311,6 @@ class TestHarvestAndPull(TmpDirCase):
         self.assertEqual(out["updates"], 0, "must not pick one of the two rows")
         kinds = [c for c in out["conflict_detail"] if c["canonical"] == "duplicate_id"]
         self.assertEqual(len(kinds), 1)
-
-    def test_a_company_only_in_review_is_appended_to_canonical(self):
-        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
-        self.build_review([("Brand New Srl", "polids-newnewne", {"Contact Search Status": "Contact found"})])
-        out = json.loads(self.run_("pull", canon).stdout)
-        self.assertEqual(out["companies_appended"], 1)
-        rows = list(csv.reader(io.StringIO(canon.read_text(encoding="utf-8")), delimiter=";"))
-        self.assertIn("Brand New Srl", [r[0] for r in rows[1:]])
-
-    def test_pull_adds_the_reviewer_notes_column_when_absent(self):
-        """Reviewer Notes has no counterpart in the old canonical schema, so pull
-        has to create it or the colleague's note is dropped."""
-        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
-        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Reviewer Notes": "chiamare lunedì"})])
-        self.run_("pull", canon)
-        rows = list(csv.reader(io.StringIO(canon.read_text(encoding="utf-8")), delimiter=";"))
-        self.assertIn("Reviewer Notes", rows[0])
-        i = rows[0].index("Reviewer Notes")
-        self.assertEqual(rows[1][i], "chiamare lunedì")
-        # and the machine prose column must be untouched
-        self.assertEqual(rows[0][A4_COLUMNS.index("Notes")], "Notes")
-
-    def test_pull_takes_a_backup(self):
-        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
-        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Contact Search Status": "Job found"})])
-        self.run_("pull", canon)
-        self.assertTrue(list((self.tmp / "_backups").glob("canon-*.csv")))
 
 
 class TestExportHistory(TmpDirCase):
@@ -1647,76 +1586,6 @@ class TestMigrateReview(TmpDirCase):
         out = json.loads(self.migrate().stdout)
         self.assertEqual(out["rows"], 1)
         self.assertEqual(list(self.read_new()[1]), ["A"])
-
-
-class TestAddVerifiedFixes(TmpDirCase):
-    """add_verified.py is the other writer. Its separator and duplicate bugs were
-    both live."""
-
-    def make_canon(self, rows):
-        p = self.tmp / "canon.csv"
-        with p.open("w", encoding="utf-8", newline="") as fh:
-            w = csv.writer(fh, delimiter=";")
-            w.writerow(A4_COLUMNS + ["Company ID"])
-            for r in rows:
-                w.writerow(r)
-        return p
-
-    def tsv_payload(self, rows):
-        hdr = A4_COLUMNS + ["Company ID"]
-        body = "\n".join("\t".join(r) for r in rows)
-        return json.dumps({"tsv": "\t".join(hdr) + "\n" + body + "\n"})
-
-    def run_add(self, canon, payload):
-        return subprocess.run(
-            [sys.executable, str(HERE / "add_verified.py"), str(canon)],
-            input=payload,
-            capture_output=True,
-            text=True,
-        )
-
-    def row(self, name, **over):
-        r = [""] * (len(A4_COLUMNS) + 1)
-        r[0] = name
-        r[A4_COLUMNS.index("Matching Job Titles")] = "1. Intern"
-        r[A4_COLUMNS.index("Job Links")] = "1. https://example.com/1"
-        r[A4_COLUMNS.index("Role Count")] = "1"
-        for col, v in over.items():
-            r[A4_COLUMNS.index(col)] = v
-        return r
-
-    def test_refuses_to_merge_into_a_duplicated_company(self):
-        """Previously `by_company[name] = r` meant the last row won, so an UPDATE
-        for KPMG merged into row 79 and row 33 became unreachable."""
-        canon = self.make_canon([self.row("KPMG"), self.row("Altro"), self.row("KPMG")])
-        before = canon.read_bytes()
-        out = json.loads(self.run_add(canon, self.tsv_payload([self.row("KPMG", **{"Notes": "[UPDATE EXISTING ROW] x"})])).stdout)
-        self.assertEqual(out["updated"], 0)
-        self.assertEqual(out["refused_ambiguous"], ["KPMG"])
-        self.assertEqual(canon.read_bytes(), before, "nothing may be written for an ambiguous update")
-        self.assertFalse((self.tmp / "~$canon.csv").exists())
-
-    def test_new_company_gets_a_company_id(self):
-        canon = self.make_canon([self.row("Altro")])
-        self.run_add(canon, self.tsv_payload([self.row("Nuova Srl")]))
-        rows = list(csv.reader(io.StringIO(canon.read_text(encoding="utf-8")), delimiter=";"))
-        r = [x for x in rows[1:] if x[0] == "Nuova Srl"][0]
-        self.assertTrue(r[rows[0].index("Company ID")].startswith("polids-"))
-
-    def test_sources_portals_written_with_semicolons_splits_into_items(self):
-        """The TSV writes Sources/Portals with '; ' but the old merge split on
-        '|' only, so a whole cell counted as one item."""
-        canon = self.make_canon([self.row("Alpha", **{"Sources / Portals": "LinkedIn Jobs"})])
-        self.run_add(
-            canon,
-            self.tsv_payload([self.row("Alpha", **{"Sources / Portals": "Indeed; iAgora"})]),
-        )
-        rows = list(csv.reader(io.StringIO(canon.read_text(encoding="utf-8")), delimiter=";"))
-        cell = [x for x in rows[1:] if x[0] == "Alpha"][0][rows[0].index("Sources / Portals")]
-        items = split_column(cell, "Sources / Portals")
-        self.assertIn("Indeed", items)
-        self.assertIn("iAgora", items)
-        self.assertIn("LinkedIn Jobs", items)
 
 
 if __name__ == "__main__":

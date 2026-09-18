@@ -36,7 +36,7 @@ talent-place/
 │   │   ├── sync_export.py       # pubblica un giro nella cartella sincronizzata
 │   │   ├── reconcile.py         # lettura canonical, ownership colonne, matching
 │   │   ├── synced_fs.py         # guardie di scrittura sul mount OneDrive
-│   │   └── add_verified.py      # righe confermate -> CSV canonico
+│   │   └── (niente altro: lo storico si legge da Review.xlsx)
 │   └── package.json (npm test)
 ```
 
@@ -143,12 +143,15 @@ Ogni cella viene trasferita **per nome di colonna**, quindi una colonna spostata
 
 4. I colleghi lavorano su `Review.xlsx`: decidono, scrivono note, registrano il contatto e il recall. Il colore si aggiorna da sé.
 
-5. Riportare le decisioni nel canonical:
+5. **Non c'è niente da risincronizzare.** `Review.xlsx` *è* la registrazione: le
+   decisioni dei colleghi restano dove le scrivono. `export-history` del punto 1 le
+   rilegge al giro successivo.
+
+   Per un controllo di sola lettura su dove Review e il canonical di allora
+   divergevano (utile durante la transizione):
    ```
    python3 engine/python/sync_export.py harvest --dir "<percorso>" \
        --history <cartella del giro>/history.csv
-   python3 engine/python/sync_export.py pull    --dir "<percorso>" \
-       --history <cartella del giro>/history.csv --report /tmp/conflitti.csv
    ```
 
 **Due file, due proprietari.** `Review.xlsx` è dei colleghi: la macchina ci aggiunge solo righe nuove in fondo, dietro guardie, e non lo rigenera mai. `Roles.xlsx` è della macchina: si rigenera ogni giro e contiene una riga per ruolo. Nessuno deve unire niente a mano.

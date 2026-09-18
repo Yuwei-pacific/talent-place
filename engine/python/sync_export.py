@@ -277,9 +277,9 @@ class StageError(Exception):
 def read_tsv_source(tsv_path: str | None) -> str:
     """--tsv PATH, raw TSV on stdin, or {"tsv": "..."} on stdin.
 
-    All three work. The JSON form is kept because it is the contract
-    add_verified.py already uses, but `cat run.tsv | sync_export.py stage ...`
-    is the natural invocation and must not fail with a JSON parse error.
+    All three work. The JSON form is kept because it was the contract an earlier
+    writer used, but `cat run.tsv | sync_export.py stage ...` is the natural
+    invocation and must not fail with a JSON parse error.
     """
     if tsv_path:
         return Path(tsv_path).read_text(encoding="utf-8")
@@ -1573,8 +1573,8 @@ def cmd_append(args: argparse.Namespace) -> int:
                     value = ""  # the colleague's column; the machine never writes it
                 elif col_name == "Company ID":
                     # A NEW company has no id yet, so propose one and store it --
-                    # otherwise the next run can only match it by name, and `pull`
-                    # has no key to write back to. Stored, never recomputed.
+                    # otherwise the next run can only match it by name. Stored,
+                    # never recomputed.
                     value = company.get("Company ID") or propose_company_id(company["Company / Outreach Account"])
                 elif col_name in HUMAN_COLS:
                     # A4's defaults: no invented contact, no invented prior contact,
@@ -1640,16 +1640,6 @@ def cmd_append(args: argparse.Namespace) -> int:
 # A4 proposal renames it in the canonical file too, but that is another
 # whole-column migration like the Themes rename and has not been approved, so
 # the mapping is explicit here instead of assumed.
-PULL_COLUMN_MAP = {"Matching Notes": "Notes"}
-
-# Columns `pull` writes back. Human-owned only -- machine columns reach the
-# canonical file through add_verified.py / the TSV path, not through Review.xlsx.
-# `Reviewer Notes` is included because it has no other home.
-PULL_COLUMNS = [c for c in HUMAN_COLS if c != "Reviewer Notes"] + ["Reviewer Notes"]
-
-# Appended to the canonical CSV by `pull` if absent, so a colleague's note has
-# somewhere to land without fusing into the machine prose.
-REVIEWER_NOTES_COLUMN = "Reviewer Notes"
 
 
 def _ensure_column(header: list[str], data: list[list[str]], name: str) -> int:
@@ -1668,10 +1658,21 @@ def _ensure_column(header: list[str], data: list[list[str]], name: str) -> int:
     return idx
 
 
+# Columns `harvest` compares between Review.xlsx and the canonical: the
+# human-owned set, plus `Reviewer Notes`, which has no other home. These were
+# called PULL_* until `pull` was removed on 2026-09-18 -- the name said pull, but
+# `harvest` is what reads them, which is how a rename can look safe and not be.
+HARVEST_COLUMNS = [c for c in HUMAN_COLS if c != "Reviewer Notes"] + ["Reviewer Notes"]
+
+# Review splits A4's single `Notes` into machine and human halves; map back when
+# comparing the two files.
+REVIEW_TO_A4_COLUMN = {"Matching Notes": "Notes"}
+
+
 def _harvest_review(d: Path, canon) -> dict:
     """Read Review.xlsx and match its rows to canonical history.
 
-    Read-only: this is the audit path, and `pull` reuses it. Returns matched
+    Read-only: this is the audit path, not a sync. Returns matched
     updates, rows with no canonical counterpart, and conflicts -- where the
     colleague's value differs from a NON-EMPTY canonical value, which is
     reported rather than silently resolved.
@@ -1696,7 +1697,7 @@ def _harvest_review(d: Path, canon) -> dict:
         m = match_company(name, canon, aliases=aliases, company_id=cid)
 
         if m.kind == "matched":
-            for col in PULL_COLUMNS:
+            for col in HARVEST_COLUMNS:
                 raw_incoming = values.get(col)
                 if raw_incoming in (None, ""):
                     continue
@@ -1711,7 +1712,7 @@ def _harvest_review(d: Path, canon) -> dict:
                     incoming = str(raw_incoming).strip()
                 if not incoming:
                     continue
-                canonical_col = PULL_COLUMN_MAP.get(col, col)
+                canonical_col = REVIEW_TO_A4_COLUMN.get(col, col)
                 current = m.row.get(canonical_col).strip()
                 # Compare as VALUES, not strings: a date written to the workbook
                 # comes back as '2026-09-03 00:00:00' against the CSV's
@@ -1761,106 +1762,6 @@ def cmd_harvest(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_pull(args: argparse.Namespace) -> int:
-    """Write colleagues' decisions from Review.xlsx into the canonical CSV.
-
-    Human values win, but overwriting a NON-EMPTY canonical value is recorded in
-    the report, never silent. Uses the same matcher and splitter as everything
-    else, which is what finally makes the readers agree.
-    """
-    d = Path(args.dir)
-    if not (d / "Review.xlsx").exists():
-        print(json.dumps({"ok": False, "error": f"{d / 'Review.xlsx'} does not exist"}, ensure_ascii=False))
-        return 2
-
-    path = Path(args.history)
-    raw = list(csv.reader(io.StringIO(path.read_text(encoding="utf-8-sig")), delimiter=";"))
-    header, data = raw[0], raw[1:]
-    _ensure_column(header, data, REVIEWER_NOTES_COLUMN)
-
-    canon = load_canonical(path)
-    h = _harvest_review(d, canon)
-
-    # Apply updates. `CanonicalRow.index` is the raw data-row index, so it maps
-    # straight back onto `data`.
-    applied = 0
-    for u in h["updates"]:
-        target_col = PULL_COLUMN_MAP.get(u["column"], u["column"])
-        if target_col not in header:
-            continue
-        r = data[u["row_index"]]
-        while len(r) < len(header):
-            r.append("")
-        ci = header.index(target_col)
-        if same_value(u["column"], r[ci], u["value"]):
-            continue
-        newval = u["value"]
-        if u["column"] in DATE_COLUMNS:
-            parsed = parse_date(newval) or parse_date(newval.split(" ")[0])
-            if parsed is not None:
-                # Keep the convention already in the cell, so a column does not
-                # end up holding ISO and DD/MM/YYYY side by side.
-                fmt = detect_date_format(r[ci]) or detect_date_format(u.get("existing", "")) or "%Y-%m-%d"
-                newval = parsed.strftime(fmt)
-        r[ci] = newval
-        applied += 1
-
-    # Companies in Review but not in canonical are new history: append them whole.
-    added = 0
-    for entry in h["new_rows"]:
-        values = entry["values"]
-        row_out = [""] * len(header)
-        for col in header:
-            v = values.get(col)
-            if v in (None, ""):
-                continue
-            row_out[header.index(col)] = v.isoformat() if isinstance(v, date) else str(v)
-        row_out[0] = entry["company"]
-        data.append(row_out)
-        added += 1
-
-    summary = {
-        "review": str(d / "Review.xlsx"),
-        "canonical": str(path),
-        "cells_updated": applied,
-        "companies_appended": added,
-        "conflicts": len(h["conflicts"]),
-    }
-    if h["conflicts"]:
-        summary["conflict_detail"] = h["conflicts"][:40]
-
-    if args.dry_run:
-        summary["dry_run"] = True
-        print(json.dumps(summary, indent=2, ensure_ascii=False))
-        return 0
-
-    if not applied and not added:
-        print(json.dumps(summary, indent=2, ensure_ascii=False))
-        return 0
-
-    backup_dir = path.parent / "_backups"
-    synced_fs.write_atomically(
-        path,
-        lambda tmp: _write_csv_rows(tmp, header, data),
-        guard=False,  # a repo CSV, not a live synced workbook
-        backup_dir=backup_dir,
-    )
-    summary["backup_dir"] = str(backup_dir)
-
-    if args.report:
-        rp = Path(args.report)
-        rp.parent.mkdir(parents=True, exist_ok=True)
-        with rp.open("w", encoding="utf-8", newline="") as fh:
-            w = csv.writer(fh, delimiter=";")
-            w.writerow(["kind", "company", "column", "canonical_value", "review_value"])
-            for c in h["conflicts"]:
-                w.writerow(["conflict", c["company"], c["column"], c["canonical"], c["review"]])
-        summary["report"] = str(rp)
-
-    print(json.dumps(summary, indent=2, ensure_ascii=False))
-    return 0
-
-
 def _not_implemented(step: str):
     def run(_args: argparse.Namespace) -> int:
         print(json.dumps({"ok": False, "error": f"not implemented yet ({step})"}, ensure_ascii=False))
@@ -1901,7 +1802,6 @@ def main() -> int:
         ("color", cmd_color, "install the conditional-formatting status rules on Review.xlsx", False),
         ("append", cmd_append, "append genuinely-new companies to Review.xlsx (guarded, append-only)", False),
         ("harvest", cmd_harvest, "report what colleagues decided (read-only)", True),
-        ("pull", cmd_pull, "write colleagues' decisions back into the canonical CSV", True),
         (
             "export-history",
             cmd_export_history,
@@ -1933,8 +1833,6 @@ def main() -> int:
             q.add_argument("--force", action="store_true", help="migrate even if some status values are unmapped")
         if name == "harvest":
             q.add_argument("--verbose", action="store_true")
-        if name == "pull":
-            q.add_argument("--report", help="where to write the conflict report")
         q.set_defaults(func=fn)
 
     q = sub.add_parser("backfill-ids", help="add a Company ID column to the canonical CSV (propose-only for duplicates)")
