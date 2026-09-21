@@ -390,6 +390,41 @@ def validate_rows(header: list[str], rows: list[list[str]]) -> list[str]:
     return problems
 
 
+def workbook_problems(header: list, rows: list[list]) -> list[str]:
+    """Closed-set columns in the workbook holding a value outside their set.
+
+    The same two constants `validate_rows` applies to TSV rows, and deliberately
+    the same wording, applied to the file that outlives a run. `stage` only ever
+    validates what it is handed, so a value that arrives by paste, by a script, or
+    in a file written before a rule changed was invisible to everything.
+
+    Motivated by a measurement rather than a worry: on 2026-09-21 this reports 105
+    of 164 rows in the live workbook, plus two cells a paste had shifted out of
+    their column years earlier and which nothing had detected since.
+
+    Empty cells are fine and never reported — an empty cell says "not stated",
+    which A4 allows. `rows` are raw cell values; dates are stringified here.
+    """
+    checks = (
+        ("Verification Status", lambda v: v.startswith(VERIFICATION_PREFIXES),
+         ", ".join(p.split()[0] for p in VERIFICATION_PREFIXES)),
+        ("Contact Search Status", lambda v: v in CONTACT_STATUS_VALUES, str(sorted(CONTACT_STATUS_VALUES))),
+    )
+    out: list[str] = []
+    for name, ok, allowed in checks:
+        if name not in header:
+            continue
+        ci = header.index(name)
+        for cells in rows:
+            if ci >= len(cells) or cells[ci] in (None, ""):
+                continue
+            value = str(cells[ci]).strip()
+            if value and not ok(value):
+                who = str(cells[0]).strip()[:36] if cells else ""
+                out.append(f"{who}: {name} = {value[:40]!r} is not one of {allowed}")
+    return out
+
+
 def parse_tsv(text: str) -> tuple[list[str], list[list[str]]]:
     """Parse the A4 TSV. Enforces A4's tab-count rule.
 
@@ -685,9 +720,18 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         else:
             check(f"{name} (absent, will be created)", True, "")
 
-    # A CF formula like `$W2<=TODAY()` compares STRINGS against "03/09/2026" and
-    # silently returns the wrong answer while the cell still looks right. Assert
-    # the date columns really hold dates.
+    # Two different questions about the same cells, answered from ONE pass:
+    #
+    #   * a CF formula like `$W2<=TODAY()` compares STRINGS against "03/09/2026"
+    #     and silently returns the wrong answer while the cell still looks right,
+    #     so a date column must hold a real date — not text that merely parses;
+    #   * a closed-set column must hold a value from its set. `stage` enforces
+    #     that on TSV rows; nothing enforced it here, which is how the live
+    #     workbook came to hold 105 rows whose `Verification Status` is prose.
+    #
+    # One `iter_rows` for both. A read-only sheet is a STREAM, so the per-column
+    # re-iteration this replaced happened to work — which is not the same as
+    # being supported.
     review = d / "Review.xlsx"
     if review.exists() and not synced_fs.is_dataless(review):
         try:
@@ -695,20 +739,30 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
             wb = load_workbook(review, read_only=True, data_only=True)
             ws = wb["Review"] if "Review" in wb.sheetnames else wb.active
-            header = [c.value for c in next(ws.iter_rows(min_row=2, max_row=2))]
+            stream = ws.iter_rows(min_row=2, values_only=True)
+            header = list(next(stream))
+            body = [list(r) for r in stream]
+            wb.close()
+
             for col in DATE_COLUMNS:
                 if col not in header:
                     continue
                 ci = header.index(col)
-                bad = []
-                for row in ws.iter_rows(min_row=3):
-                    v = row[ci].value if ci < len(row) else None
-                    if v not in (None, "") and not isinstance(v, datetime):
-                        bad.append(str(row[0].value)[:28])
+                bad = [
+                    str(r[0])[:28]
+                    for r in body
+                    if ci < len(r) and r[ci] not in (None, "") and not isinstance(r[ci], datetime)
+                ]
                 check(f"Review.xlsx '{col}' holds dates", not bad, f"non-date in: {bad[:4]}" if bad else "")
-            wb.close()
+
+            problems = workbook_problems(header, body)
+            check(
+                "Review.xlsx closed-set columns hold A4's values",
+                not problems,
+                f"{len(problems)} value(s): " + " | ".join(problems[:3]) if problems else "",
+            )
         except Exception as exc:  # noqa: BLE001
-            check("Review.xlsx date columns readable", False, str(exc)[:120])
+            check("Review.xlsx readable", False, str(exc)[:120])
 
     report["dirs"] = {"_machine": str(d / "_machine"), "backups": str(d / "_machine" / "backups")}
     print(json.dumps(report, indent=2, ensure_ascii=False))
@@ -976,6 +1030,15 @@ def _build_review_workbook(path: Path, canon) -> int:
                 value = parsed if parsed is not None else cr.get(name)
                 if parsed is not None:
                     ws.cell(row, c).number_format = DATE_NUMBER_FORMAT
+            elif name == "Contact Search Status":
+                # The canonical being seeded from can still hold a superseded value
+                # (`Contacted`, `No suitable contact`) — the shipped history fixture
+                # carries one. `migrate-review` translates those on a live sheet;
+                # without the same step here a freshly created file is born outside
+                # the vocabulary, and `doctor` then fails on the very first run —
+                # which is how a check gets learned as noise and ignored.
+                raw = cr.get(name)
+                value = LEGACY_CONTACT_STATUS.get(raw.strip(), raw)
             else:
                 value = cr.get(name)
             ws.cell(row, c, value if value not in (None, "") else None)

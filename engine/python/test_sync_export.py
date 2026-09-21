@@ -861,6 +861,77 @@ class TestReviewWorkbook(TmpDirCase):
         checks = {c["check"]: c for c in json.loads(proc.stdout)["checks"]}
         self.assertTrue(checks["Review.xlsx 'First Contact Date' holds dates"]["ok"])
 
+    def test_init_review_carries_a_superseded_status_forward(self):
+        """A new file must not be born outside the vocabulary.
+
+        `make_canon` seeds `Contact Search Status = Contacted`, which A4 lists
+        under LEGACY_CONTACT_STATUS. `migrate-review` translates those on a live
+        sheet; `init-review` used to copy them verbatim, so a freshly created
+        workbook failed doctor's closed-set check on its first run.
+        """
+        self.init()
+        from openpyxl import load_workbook
+
+        ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
+        header = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
+        ci = header.index("Contact Search Status") + 1
+        self.assertEqual(ws.cell(3, ci).value, "Contact found", "Contacted is a superseded value")
+        self.assertEqual(ws.cell(4, ci).value, "Not started", "a current value passes through")
+
+    def test_doctor_passes_a_workbook_whose_values_fit_their_columns(self):
+        self.init()
+        proc = self.run_cmd("doctor", "--dir", str(self.tmp))
+        checks = {c["check"]: c for c in json.loads(proc.stdout)["checks"]}
+        self.assertTrue(checks["Review.xlsx closed-set columns hold A4's values"]["ok"])
+
+    def test_doctor_reports_a_value_outside_its_closed_set(self):
+        """The rule `stage` applies to TSV rows, applied to the workbook.
+
+        Motivated by measurement, not by worry: on 2026-09-21 this reports 105 of
+        164 rows in the live workbook, whose `Verification Status` is prose rather
+        than one of A4's five values and which nothing had ever flagged. `stage`
+        validates only what it is handed, so the file colleagues edit was the one
+        place where a closed set was not closed.
+        """
+        self.init()
+        from openpyxl import load_workbook
+
+        wb = load_workbook(self.tmp / "Review.xlsx")
+        ws = wb["Review"]
+        header = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
+        # An A4 value followed by free detail is legal; the bare detail is not.
+        ws.cell(3, header.index("Verification Status") + 1, "LinkedIn evidence captured; employer page not verified")
+        # `Contacted` is a superseded value: A4 lists it under LEGACY_CONTACT_STATUS.
+        ws.cell(4, header.index("Contact Search Status") + 1, "Contacted")
+        wb.save(self.tmp / "Review.xlsx")
+
+        proc = self.run_cmd("doctor", "--dir", str(self.tmp))
+        found = {c["check"]: c for c in json.loads(proc.stdout)["checks"]}[
+            "Review.xlsx closed-set columns hold A4's values"
+        ]
+        self.assertFalse(found["ok"])
+        self.assertIn("Verification Status", found["detail"])
+        self.assertIn("Contact Search Status", found["detail"])
+        self.assertIn("Alpha Srl", found["detail"])
+
+    def test_doctor_treats_an_empty_closed_set_cell_as_not_stated(self):
+        """Empty is what A4 uses for "not stated", so it is not a problem.
+
+        The two cells the Bain/Moncler paste corrupted were cleared to empty
+        rather than guessed at; this check must not then call them a fault."""
+        self.init()
+        from openpyxl import load_workbook
+
+        wb = load_workbook(self.tmp / "Review.xlsx")
+        ws = wb["Review"]
+        header = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
+        ws.cell(3, header.index("Verification Status") + 1).value = None
+        wb.save(self.tmp / "Review.xlsx")
+
+        proc = self.run_cmd("doctor", "--dir", str(self.tmp))
+        checks = {c["check"]: c for c in json.loads(proc.stdout)["checks"]}
+        self.assertTrue(checks["Review.xlsx closed-set columns hold A4's values"]["ok"])
+
 
 class TestRowValidation(TmpDirCase):
     """The tab-count rule cannot see a row shifted sideways: 22 tabs is 22 tabs
