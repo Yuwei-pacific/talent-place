@@ -85,6 +85,10 @@ Se manca una descrizione affidabile, non assegnare etichetta né punteggio: cons
 
 Un semplice “detail_ok” non basta: indicare sempre quale fonte è stata verificata.
 
+Questo elenco vincola **ciò che produce una ricerca**: il TSV, che `stage` verifica riga per riga. La copia della colonna che vive in `Review.xlsx` è invece un testo che legge una persona — nessuna selezione, nessun raggruppamento e nessun filtro la usa. Resta quindi com’è dove non corrisponde all’elenco, e non va allineata a mano per farla combaciare.
+
+La differenza con `Contact Search Status` è voluta, non una svista. Quella è **strutturale**: è l’asse su cui `Review.xlsx` colora l’intera riga, e un valore fuori elenco la rende bianca — cioè indistinguibile da `Not started`. Per questo la macchina lo rifiuta in ingresso e lo segnala. `Verification Status` è **di riferimento**: si legge, non si interroga.
+
 Se nessun nuovo ruolo è ammissibile e valutabile, scrivere “Oggi nessun nuovo stage ammissibile e non duplicato.” e produrre il solo header. Se lo storico non è verificabile, usare invece “Oggi nessuno stage ammissibile tra quelli verificati; deduplicazione storica non verificabile.” Segnalare eventuali candidati non risolti o copertura limitata: zero risultati non prova che non esistano opportunità.
 
 Dopo il TSV elencare fino a cinque ruoli vicini al target ma esclusi, con link e motivo. Non confondere escluso per incompatibilità, duplicato storico e non verificabile: sono esiti diversi.
