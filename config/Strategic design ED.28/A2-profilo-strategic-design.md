@@ -107,7 +107,7 @@ La ricerca può esplorare le aree da confermare dichiarandole come ipotesi opera
 
 **Termini di ricerca — a cura di Talent Placement:** CRM, customer intelligence, consumer insight, segmentation, analisi clienti
 
-### Consulting / Operations
+### Consulting
 
 **Presenza nel percorso:** Da confermare
 
@@ -121,7 +121,7 @@ La ricerca può esplorare le aree da confermare dichiarandole come ipotesi opera
 
 **Riferimento didattico o progetto di esempio:** Da indicare dal team didattico.
 
-**Termini di ricerca — a cura di Talent Placement:** consulting, consultant, operations, project management, business analyst, miglioramento processi
+**Termini di ricerca — a cura di Talent Placement:** consulting, consultant, project management, business analyst, miglioramento processi
 
 ### Sustainability
 
