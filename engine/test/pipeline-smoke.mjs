@@ -44,8 +44,8 @@ const cfg = {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Tagging. Adapters append their own location to discoveryQuery, so the
-//    match is by prefix; a card found by two areas belongs to both.
+// 2. Tagging. Adapters append their own location to discoveryQuery, so the query
+//    is the segment's HEAD; a card found by two areas belongs to both.
 // ---------------------------------------------------------------------------
 {
   const pairs = buildQueries(cfg);
@@ -75,6 +75,21 @@ const cfg = {
     'a card surfaced by two queries must carry both areas, not just the first',
   );
   assert.deepEqual(multi[0].queries.sort(), ['innovation internship', 'service design stage']);
+
+  // A query that is a PREFIX of another must not credit both areas. Comparing
+  // with `startsWith` did exactly that, so the card carried a theme from an area
+  // whose query it never matched — safe only for as long as no A2 term list
+  // happens to collide, which is not a property anyone maintains.
+  const prefixPairs = [
+    { query: 'design intern', area: 'Broad' },
+    { query: 'design intern ux', area: 'Narrow' },
+  ];
+  const collided = tagCards([card({ discoveryQuery: 'design intern ux — Milan' })], prefixPairs);
+  assert.deepEqual(
+    collided[0].areas,
+    ['Narrow'],
+    'a card found by "design intern ux" must not also be credited to "design intern"',
+  );
 }
 
 // ---------------------------------------------------------------------------

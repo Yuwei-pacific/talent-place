@@ -22,6 +22,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -31,11 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import synced_fs  # noqa: E402
 from reconcile import (  # noqa: E402
     _ALT_SPLIT,
-    MACHINE_LATEST_COLS,
-    MACHINE_UNION_COLS,
     DATE_COLUMNS,
     HUMAN_COLS,
-    detect_date_format,
     load_aliases,
     load_canonical,
     match_company,
@@ -97,7 +95,7 @@ ROLE_COLUMNS = [
     "Date Checked",
 ]
 
-COMPANY_SUMMARY_COLUMNS = A4_COLUMNS + ["Company ID", "Role Count (peak)"]
+COMPANY_SUMMARY_COLUMNS = A4_COLUMNS + ["Company ID"]
 
 # --------------------------------------------------------------------------
 # The human-facing workbook.
@@ -737,7 +735,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return 1
     check("dir is a directory", d.is_dir())
-    check("dir writable", __import__("os").access(d, __import__("os").W_OK))
+    check("dir writable", os.access(d, os.W_OK))
 
     # Is this actually on a OneDrive File Provider mount? Guessing wrong would
     # silently write somewhere colleagues cannot see.
@@ -887,7 +885,11 @@ def cmd_stage(args: argparse.Namespace) -> int:
         return 0
 
     _write_csv(roles_csv, ROLE_COLUMNS, role_rows)
-    _write_csv(companies_csv, A4_COLUMNS, company_rows)
+    # `Company ID` rides along even though it is not an A4 column: `stage` already
+    # resolves it above, and `append` reads it back when giving a new company an
+    # identity. Without it here that lookup could never hit, and the id would be
+    # recomputed rather than carried.
+    _write_csv(companies_csv, A4_COLUMNS + ["Company ID"], company_rows)
     synced_fs.write_atomically(
         roles_xlsx,
         lambda tmp: _write_roles_workbook(tmp, role_rows, company_rows),
@@ -1211,7 +1213,7 @@ def cmd_export_history(args: argparse.Namespace) -> int:
 
     from openpyxl import load_workbook
 
-    wb = load_workbook(target, rich_data=True, read_only=True) if False else load_workbook(target, read_only=True)
+    wb = load_workbook(target, read_only=True)
     ws = wb["Review"] if "Review" in wb.sheetnames else wb.active
     canon = _review_as_canonical(ws)
 
@@ -1605,13 +1607,19 @@ def cmd_append(args: argparse.Namespace) -> int:
 
     to_add: list[dict[str, str]] = []
     deferred: list[dict[str, str]] = []
+    # Counted, not derived by subtraction. `len(companies) - len(to_add) - len(deferred)`
+    # also swept in rows skipped for an empty company name, so a malformed run
+    # inflated "already present" — the one number an operator reads to decide
+    # whether a run found anything new.
+    already = 0
     for row in companies:
         name = (row.get("Company / Outreach Account") or "").strip()
         if not name:
             continue
         m = match_company(name, existing, aliases=aliases)
         if m.kind == "matched":
-            continue  # already present
+            already += 1
+            continue
         if m.kind in ("ambiguous", "needs_human"):
             # Never auto-append: a near-duplicate or an already-twice-present name
             # is how the 5 existing duplicate rows happened.
@@ -1629,7 +1637,7 @@ def cmd_append(args: argparse.Namespace) -> int:
         "run_id": run_id,
         "target": str(target),
         "in_run": len(companies),
-        "already_present": len(companies) - len(to_add) - len(deferred),
+        "already_present": already,
         "to_append": len(to_add),
         # Always present, so callers never have to branch on whether anything was
         # written. Stays 0 on the dry-run and on every refusal path.
@@ -1729,25 +1737,9 @@ def cmd_append(args: argparse.Namespace) -> int:
 #
 # The canonical CSV still calls the machine prose column `Notes`; Review.xlsx
 # calls it `Matching Notes` because it sits beside `Reviewer Notes` there. The
-# A4 proposal renames it in the canonical file too, but that is another
-# whole-column migration like the Themes rename and has not been approved, so
-# the mapping is explicit here instead of assumed.
-
-
-def _ensure_column(header: list[str], data: list[list[str]], name: str) -> int:
-    """Append `name` to the header (never insert) and pad rows to match.
-
-    Appending keeps every positional reader that slices `hdr[:22]` intact --
-    same reasoning as `Company ID`.
-    """
-    if name in header:
-        return header.index(name)
-    idx = len(header)
-    header.append(name)
-    for r in data:
-        while len(r) < len(header):
-            r.append("")
-    return idx
+# The exported history calls that column `Notes` because it is A4-shaped;
+# Review.xlsx calls it `Matching Notes` because it sits beside `Reviewer Notes`
+# there. The mapping is explicit rather than assumed.
 
 
 # Columns `harvest` compares between Review.xlsx and the canonical: the

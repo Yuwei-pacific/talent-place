@@ -85,12 +85,18 @@ export function buildQueries(cfg: PipelineConfig): Array<{ query: string; area: 
  * to each segment, so the comparison is a prefix within the segment.
  */
 export function tagCards(cards: Card[], pairs: Array<{ query: string; area: string }>): TaggedCard[] {
+  // An adapter appends its own location to each segment ("<query> — <loc>"), so
+  // the query is the segment's HEAD. Comparing with `startsWith` alone credited a
+  // card to any area whose query is a prefix of another area's — harmless only
+  // for as long as no A2 term list happens to collide, which is not a property
+  // anyone maintains.
+  const headOf = (segment: string): string => segment.split(' — ')[0];
   return cards.map((c) => {
-    const segments = c.discoveryQuery.split(' + ');
+    const segments = c.discoveryQuery.split(' + ').map(headOf);
     const areas: string[] = [];
     const queries: string[] = [];
     for (const { query, area } of pairs) {
-      if (!segments.some((s) => s.startsWith(query))) continue;
+      if (!segments.includes(query)) continue;
       if (!areas.includes(area)) areas.push(area);
       if (!queries.includes(query)) queries.push(query);
     }

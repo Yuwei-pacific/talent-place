@@ -59,7 +59,7 @@ All from `engine/`:
 ```bash
 npm run build       # tsc: src/ -> lib/
 npm run typecheck   # tsc --noEmit
-npm test            # build, then 12 node smoke tests, then the Python suite
+npm test            # build, then the node smoke tests, then the Python suite
 
 # single test — node tests import from lib/, so build first
 node test/geo-smoke.mjs

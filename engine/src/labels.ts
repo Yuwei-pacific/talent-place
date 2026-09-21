@@ -8,6 +8,12 @@ export function decisionToA1(
   hasReliableDescription: boolean,
   score: number | null,
 ): A1Label {
+  // Exclusions are decided BEFORE the description test, deliberately. A1 puts
+  // "fuori profilo o incompatibili con i vincoli applicabili" in the exclusions,
+  // and a hard constraint — a senior title, a fully-remote posting, a required
+  // language that is not admitted — is established without reading the whole
+  // description. So this is the one place an unread card does not become
+  // `non_risolto`, and the ordering says so rather than leaving it to chance.
   if (decision === 'exclude') return 'fuori profilo';
   if (!hasReliableDescription) return 'non_risolto';
   if (score !== null && (score < 0 || score > 100)) {

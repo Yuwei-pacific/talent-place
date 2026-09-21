@@ -36,9 +36,9 @@ function parseArgs(argv: string[]): Record<string, string> {
   return out;
 }
 
-/** History matching, so the run never re-proposes a role the canonical CSV or
- *  Review.xlsx already carries. Both sources are read; a card found in either
- *  is a duplicate. */
+/** History matching, so the run never re-proposes a role the record already
+ *  carries. One source: the CSV `export-history` renders from Review.xlsx. A
+ *  card found in it is a duplicate. */
 function historySplit(csvPath: string | undefined) {
   if (!csvPath) return undefined;
   const history = loadHistory(resolve(csvPath));
@@ -74,7 +74,7 @@ function summary(r: PipelineResult, masterId: string, edition: string): string {
 
 const USAGE = [
   'usage:',
-  '  node lib/cli.js discover --config <run.json> --out <dir> [--history <canonical.csv>]',
+  '  node lib/cli.js discover --config <run.json> --out <dir> [--history <exported history.csv>]',
   '  node lib/cli.js verify   --urls <list.txt>  --out <dir>',
   '',
   'verify reads one URL per line (optionally "label;url"), probes each on the',

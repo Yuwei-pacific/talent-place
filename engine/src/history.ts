@@ -1,5 +1,8 @@
-// History = canonical Excel/CSV (semicolon-delimited, A4 columns).
-// Read-only for search; add-verified is the only writer.
+// History = the CSV `sync_export.py export-history` renders from the Master's
+// Review.xlsx (semicolon-delimited, A4 columns plus `Company ID`).
+//
+// Read-only here: a run only ever reads it. The one writer in the system is
+// `sync_export.py append`, which writes into Review.xlsx — not into this file.
 import { readFileSync } from 'node:fs';
 import { crossPortalKey, normCompany, normalizeUrl, splitColumn } from './normalize.js';
 
@@ -89,7 +92,7 @@ export function loadHistory(csvPath: string): Map<string, HistoryEntry> {
   const iTitles = ci('Matching Job Titles');
   const iLinks = ci('Job Links');
   const iLocs = ci('Locations');
-  // Appended column; absent until backfill-ids has run.
+  // Appended beyond the A4 columns, and always written by `export-history`.
   const iCompanyId = ci('Company ID');
   const byCompany = new Map<string, HistoryEntry>();
   for (const line of records.slice(1)) {

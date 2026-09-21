@@ -301,8 +301,8 @@ class Canonical:
     # has 5 such names (JAKALA, KPMG, NTT DATA, PwC, TeamViewer) whose two rows
     # were given the same proposed id when the column was added. Collapsing them to one row
     # would silently route every update to the first row and leave the second
-    # permanently unreachable -- the same failure as add_verified.py's
-    # last-row-wins, just via a different key.
+    # permanently unreachable -- the same failure the deleted add_verified.py had
+    # when it let the last row win, just via a different key.
     id_groups: dict[str, list[CanonicalRow]] = field(default_factory=dict)
     ambiguous_ids: set[str] = field(default_factory=set)
 
@@ -343,11 +343,14 @@ def load_canonical(path: str | Path) -> Canonical:
 def find_duplicate_names(canon: Canonical) -> dict[str, list[CanonicalRow]]:
     """Company names appearing on more than one row.
 
-    The canonical CSV has 5 such names (JAKALA, KPMG, NTT DATA, PwC,
-    TeamViewer) and the two historical writers resolved them OPPOSITELY:
-    history.ts merged them, add_verified.py let the last row win so the earlier
-    row became unreachable. They are reported, never auto-merged — merging would
-    force a choice between two sets of human-owned contact fields.
+    The two historical writers resolved them OPPOSITELY: `history.ts` merged them,
+    the since-deleted `add_verified.py` let the last row win so the earlier row
+    became unreachable. They are reported, never auto-merged — merging would force
+    a choice between two sets of human-owned contact fields.
+
+    Deliberately no count and no names here. Both change — one pair was resolved
+    while this docstring still said "5" — and a number in a docstring is one more
+    thing that has to stay true. Linear tracks which ones are outstanding.
     """
     return {k: v for k, v in canon.by_norm_name.items() if len(v) > 1}
 

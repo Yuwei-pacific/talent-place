@@ -30,7 +30,7 @@ talent-place/
 │   │   ├── verify.ts            # sonda del sito datore, prima del browser
 │   │   ├── discovery/           # linkedin-guest, ats, aggregators, employer, http
 │   │   └── ...                  # normalize, dedup-cards, geo, prefilter, history
-│   ├── test/                    # 15 test node (uno tocca la rete)
+│   ├── test/                    # test node (uno tocca la rete)
 │   ├── python/
 │   │   ├── sync_export.py       # pubblica un giro nella cartella sincronizzata
 │   │   ├── reconcile.py         # lettura canonical, ownership colonne, matching
@@ -198,7 +198,7 @@ un aggiornamento ambiguo viene **rifiutato**, un valore illeggibile viene
 Da `engine/`:
 
 ```bash
-npm test                              # build + 15 test node + suite Python (99 test)
+npm test                              # build + i test node + la suite Python
 python3 python/test_sync_export.py    # sola suite Python
 ```
 
