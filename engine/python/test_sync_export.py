@@ -1156,6 +1156,81 @@ class TestAppend(TmpDirCase):
         self.assertEqual(out["appended"], 1)
         self.assertEqual(out["already_present"], 1)
 
+    def test_a_drifted_header_is_refused_not_read_as_empty(self):
+        """Every reader finds its columns by name, so a missing one reads as "".
+
+        Measured with only `Company / Outreach Account` renamed: every company
+        read as unknown, so a run re-proposes accounts it already has; and the row
+        `append` then writes carries the role, the links, a `Not started` status
+        and a fresh `Company ID` — with no company name at all, because the writer
+        resolves column names the same way the reader does. Silent in both
+        directions, and indistinguishable from normal operation downstream.
+        """
+        self.build([{"Company / Outreach Account": "Esistente Srl", "Company ID": "polids-11111111"}])
+        self.stage_run([self.new_company("Nuova Srl")])
+
+        from openpyxl import load_workbook
+
+        target = self.tmp / "Review.xlsx"
+        wb = load_workbook(target)
+        ws = wb["Review"]
+        ws.cell(2, 1, "Company")  # was "Company / Outreach Account"
+        wb.save(target)
+
+        proc = self.run_append()
+        self.assertEqual(proc.returncode, 1, "append must refuse, not re-add the sheet")
+        out = json.loads(proc.stdout)
+        self.assertFalse(out["ok"])
+        self.assertIn("Company / Outreach Account", out["error"])
+
+        # Nothing was written: the sheet still holds exactly its one company.
+        ws = load_workbook(target)["Review"]
+        self.assertEqual([ws.cell(r, 1).value for r in range(3, ws.max_row + 1)], ["Esistente Srl"])
+
+        # The pre-run reader refuses for the same reason, so a run cannot dedup
+        # against a sheet nobody can read.
+        pre = subprocess.run(
+            [
+                sys.executable, str(HERE / "sync_export.py"), "export-history",
+                "--dir", str(self.tmp), "--out", str(self.tmp / "h.csv"),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(pre.returncode, 1)
+        self.assertIn("Company / Outreach Account", json.loads(pre.stdout)["error"])
+
+    def test_migrate_review_still_reads_a_drifted_header(self):
+        """The repair tool must not be behind the guard it exists to repair.
+
+        `migrate-review` reads the sheet's header itself rather than through
+        `_review_as_canonical`, which is what lets it rebuild a sheet the readers
+        now refuse. If that ever changes, a drifted header becomes unfixable.
+        """
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Review"
+        # A header missing most of the current columns — the drifted case.
+        for c, name in enumerate(["Company / Outreach Account", "Contact Search Status", "Company ID"], start=1):
+            ws.cell(2, c, name)
+        ws.cell(3, 1, "Alpha Srl")
+        ws.cell(3, 2, "Not started")
+        ws.cell(3, 3, "polids-aaaaaaaa")
+        wb.save(self.tmp / "Review.xlsx")
+
+        proc = subprocess.run(
+            [sys.executable, str(HERE / "sync_export.py"), "migrate-review", "--dir", str(self.tmp)],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        out = json.loads(proc.stdout)
+        self.assertTrue(out["ok"])
+        self.assertTrue(out["columns_added"], "the rebuild should have added the missing columns")
+        self.assertEqual(out["rows"], 1)
+
     def test_a_gap_in_the_middle_does_not_write_over_the_rows_below(self):
         """Row 5 emptied, rows 6-7 still holding companies, two new ones to add.
 

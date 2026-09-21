@@ -1385,10 +1385,40 @@ def _review_as_canonical(ws) -> object:
     """View the open Review sheet as a Canonical so `match_company` can be reused
     verbatim. Same ladder, same ambiguity handling as everywhere else — a second
     implementation of "is this company already known" is how the readers drift
-    apart again."""
+    apart again.
+
+    Refuses a sheet whose header has drifted, BEFORE reading a single row, and
+    this is the one place to put that: every reader of Review.xlsx goes through
+    here, and `migrate-review` — the tool you run when a header needs rebuilding —
+    deliberately does not.
+
+    Why it has to be explicit: every column is located BY NAME, so a missing one
+    does not raise, it reads as `""`. `CanonicalRow.get` swallows the ValueError
+    for exactly that reason. Measured with only `Company / Outreach Account`
+    renamed:
+
+      * every company read as unknown, so a run re-proposes accounts it already
+        has and `append` sees them all as new;
+      * the row `append` then writes carries the role, the links, a `Not started`
+        status and a fresh `Company ID` — and NO company name, because the writer
+        resolves column names the same way the reader does.
+
+    So it fails silently in both directions at once, and nothing downstream can
+    tell any of it from normal operation.
+    """
     from reconcile import Canonical, CanonicalRow
 
     header = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
+    missing = [c for c in REVIEW_COLUMNS if c not in header]
+    if missing:
+        shown = ", ".join(missing[:4]) + (" …" if len(missing) > 4 else "")
+        raise StageError(
+            f"Review.xlsx is missing {len(missing)} expected column(s): {shown}. "
+            "Columns are read by name, so a missing one reads as empty rather than "
+            "failing — for `Company / Outreach Account` that makes every company look "
+            "new, and `append` would re-add the whole sheet. Run `migrate-review` to "
+            "rebuild it onto the current columns, or restore the header."
+        )
     rows = []
     for r in range(3, ws.max_row + 1):
         cells = [ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
