@@ -1064,6 +1064,103 @@ class TestAppend(TmpDirCase):
         self.assertEqual(out["appended"], 1)
         self.assertEqual(out["already_present"], 1)
 
+    def test_a_gap_in_the_middle_does_not_write_over_the_rows_below(self):
+        """Row 5 emptied, rows 6-7 still holding companies, two new ones to add.
+
+        `_first_free_row` returned 5 once and the loop then did `row_i += 1`, so
+        the second new company landed on row 6 and Delta Srl was gone — company,
+        status, notes, dates, all of it. Verified against the pre-fix code before
+        the fix was written, not inferred.
+        """
+        self.build([
+            {"Company / Outreach Account": "Alfa Srl"},
+            {"Company / Outreach Account": "Bravo Srl"},
+            {},  # row 5 — emptied by a colleague, nothing else in it
+            {"Company / Outreach Account": "Delta Srl"},
+            {"Company / Outreach Account": "Echo Srl"},
+        ])
+        self.stage_run([self.new_company("Foxtrot Srl"), self.new_company("Golf Srl")])
+        proc = self.run_append()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+        from openpyxl import load_workbook
+
+        ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
+        self.assertEqual(
+            [ws.cell(r, 1).value for r in range(3, ws.max_row + 1)],
+            # The emptied row IS reused — that is the point of scanning rather than
+            # taking max_row+1. What must not happen is the next new company
+            # continuing downwards into Delta.
+            ["Alfa Srl", "Bravo Srl", "Foxtrot Srl", "Delta Srl", "Echo Srl", "Golf Srl"],
+        )
+
+    def test_a_row_that_still_holds_values_is_refused_not_overwritten(self):
+        """Clearing only the company name leaves the rest of the row behind.
+
+        Writing a new company there would take the previous one's job links and
+        machine notes, so the append refuses instead: Review.xlsx is left exactly
+        as it was and the row goes to the sidecar. Same trade as every other
+        guard — a missed append costs one paste, a silent overwrite costs a
+        colleague's work.
+        """
+        self.build([
+            {"Company / Outreach Account": "Alfa Srl"},
+            {"Company / Outreach Account": "Bravo Srl"},
+            {
+                "Matching Job Titles": "1. Service Design Intern",
+                "Job Links": "1. https://example.com/vecchio",
+                "Matching Notes": "[NEW COMPANY] [pertinente] Match score: 90/100; nota",
+            },
+            {"Company / Outreach Account": "Delta Srl"},
+        ])
+        self.stage_run([self.new_company("Foxtrot Srl")])
+        proc = self.run_append()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        out = json.loads(proc.stdout)
+        self.assertEqual(out["appended"], 0)
+        self.assertEqual(out["reason"], "cell_occupied")
+
+        from openpyxl import load_workbook
+
+        ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
+        link_at = REVIEW_COLUMNS.index("Job Links") + 1
+        self.assertEqual(ws.cell(5, link_at).value, "1. https://example.com/vecchio")
+        self.assertIsNone(ws.cell(5, 1).value, "the company cell must still be empty")
+
+    def test_the_sidecar_carries_what_the_workbook_would_have_written(self):
+        """The sidecar replaces a refused append, so it has to be as complete.
+
+        It was not. It looked the columns up in the A4-shaped dict — where the
+        machine notes column is `Notes`, not `Matching Notes` — and the two values
+        that exist only inside the append loop (`Contact Search Status` from
+        A4's defaults, `Company ID` from `propose_company_id`) were absent from
+        that dict entirely. Three columns came out empty on every row of every
+        sidecar, including the A4-mandated per-role justification.
+        """
+        self.build([{"Company / Outreach Account": "Esistente Srl"}])
+        self.stage_run([self.new_company("Nuova Srl")])
+        # Any refusal takes the sidecar path; an Excel owner file is the cheapest
+        # one to arrange from a test.
+        (self.tmp / "~$Review.xlsx").write_bytes(b"lock")
+        proc = self.run_append()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        out = json.loads(proc.stdout)
+        self.assertEqual(out["appended"], 0)
+        self.assertEqual(out["reason"], "excel_lock")
+
+        sidecar = self.tmp / f"Review-additions-{out['run_id']}.csv"
+        rows = list(csv.DictReader(io.StringIO(sidecar.read_text(encoding="utf-8")), delimiter=";"))
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["Company / Outreach Account"], "Nuova Srl")
+        self.assertEqual(row["Matching Notes"], "machine note", "the A4 justification was always empty")
+        self.assertEqual(row["Contact Search Status"], "Not started", "the status default was always empty")
+        # Determinstic, so this is also the id a later `append` would propose --
+        # pasting the sidecar and appending it later cannot mint two identities.
+        self.assertEqual(row["Company ID"], propose_company_id("Nuova Srl"), "the id was always empty")
+        self.assertEqual(row["Reviewer Notes"], "", "the machine never writes the colleague's column")
+        self.assertEqual(row["Last Checked"], "2026-09-15", "dates go out ISO, not 15/09/2026")
+
     def test_machine_owned_dates_are_written_as_real_dates(self):
         """`Last Checked` is machine-owned (A4 MACHINE_LATEST_COLS) even though it
         is a date column. Blanking it would lose the run date."""

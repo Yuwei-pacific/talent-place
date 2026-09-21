@@ -181,6 +181,16 @@ VALIDATION = {
     ],
 }
 
+# What a NEW company row starts as, for the human-owned columns. A4: no invented
+# contact, no invented prior contact, no guessed date, and the outreach decision
+# stays with a person -- which is why `Outreach Decision` is a constant here and
+# not something a run supplies.
+NEW_COMPANY_DEFAULTS = {
+    "Contact Search Status": "Not started",
+    "Outreach Decision": "Review",
+    "Previously Contacted?": "To verify",
+}
+
 # Columns that exist per-role now but had NO home in the flat TSV, so no value
 # can be recovered for a historical run. They are present so that future runs
 # (once the search output carries them) do not lose them again.
@@ -1323,11 +1333,77 @@ def _review_as_canonical(ws) -> object:
 
 def _first_free_row(ws) -> int:
     """First row from 3 down whose company cell is empty. Scans rather than using
-    max_row+1 so a deleted or gapped row is reused instead of leaving a hole."""
+    max_row+1 so an emptied row is reused instead of leaving a hole.
+
+    Call this ONCE PER COMPANY, never once and then `row_i += 1`. Incrementing
+    walks past a gap straight into the occupied rows below it: with row 5 emptied
+    and rows 6..7 still holding companies, `append` wrote the second new company
+    over row 6's. Resolving again each time returns a row, or the bottom of the
+    sheet, and can never return an occupied one.
+    """
     for r in range(3, ws.max_row + 2):
         if not str(ws.cell(r, 1).value or "").strip():
             return r
     return ws.max_row + 1
+
+
+def _cell_conflicts(cell, value: object) -> bool:
+    """Would writing `value` here destroy something already in the cell?
+
+    Dates are compared as dates: a cell holds a real datetime while the incoming
+    value is the A4 string, so `str(datetime)` -- '2026-09-01 00:00:00' against
+    '01/09/2026' -- would call every date a conflict.
+    """
+    current = cell.value
+    if current in (None, ""):
+        return False
+    if isinstance(current, datetime):
+        parsed = parse_date(str(value))
+        return parsed is None or current.date() != parsed
+    return str(current).strip() != str(value).strip()
+
+
+def _new_company_values(company: dict[str, str]) -> dict[str, object]:
+    """Every value `append` writes for a genuinely-new company, keyed by REVIEW_COLUMNS.
+
+    One function, because there were two writers and they disagreed. The workbook
+    path built these values inline; the guard-refusal sidecar did
+    `company.get(col_name)` over a dict shaped by A4_COLUMNS instead. Three
+    columns therefore came out empty on every row of every sidecar:
+    `Matching Notes` (the companies CSV calls it `Notes`) and the two values that
+    exist only here, `Contact Search Status` and `Company ID`.
+    """
+    out: dict[str, object] = {}
+    for col in REVIEW_COLUMNS:
+        if col == "Matching Notes":
+            out[col] = company.get(NOTES_SOURCE_COLUMN, "")
+        elif col == "Reviewer Notes":
+            out[col] = ""  # the colleague's column; the machine never writes it
+        elif col == "Company ID":
+            # A NEW company has no id yet, so propose one and store it -- otherwise
+            # the next run can only match it by name. Stored, never recomputed.
+            # Deterministic, so the id here is the id a later `append` would propose.
+            out[col] = company.get("Company ID") or propose_company_id(company["Company / Outreach Account"])
+        elif col in HUMAN_COLS:
+            out[col] = NEW_COMPANY_DEFAULTS.get(col, "")
+        else:
+            out[col] = company.get(col, "")
+    return out
+
+
+def _sidecar_value(column: str, value: object) -> str:
+    """One cell of the guard-refusal sidecar.
+
+    Dates go out as ISO. A CSV cannot hold a real date, so pasting this file back
+    puts text in a date column either way -- but `2026-09-01` is the format
+    `parse_date` reads without ambiguity and that Excel reads as a date in any
+    locale, while `01/09/2026` is the one a permissive reader gets wrong.
+    """
+    if column in DATE_COLUMNS:
+        parsed = parse_date(str(value))
+        if parsed is not None:
+            return parsed.isoformat()
+    return "" if value is None else str(value)
 
 
 def _read_machine_companies(d: Path, run_id: str | None) -> tuple[str, list[dict[str, str]]]:
@@ -1428,37 +1504,32 @@ def cmd_append(args: argparse.Namespace) -> int:
         return 0
 
     def apply(tmp: Path) -> None:
-        row_i = _first_free_row(ws)
         for company in to_add:
+            # Resolved PER COMPANY. See _first_free_row: computing it once and
+            # then incrementing walks past a gap into the occupied rows below.
+            row_i = _first_free_row(ws)
+            values = _new_company_values(company)
             for c, col_name in enumerate(header, start=1):
-                # Ownership decides the value. NOTE: ownership and date-ness are
-                # different axes -- `Last Checked` is machine-owned (A4
-                # MACHINE_LATEST_COLS) while `First Contact Date`/`Recall` are
-                # human-owned, and all three are date columns. Blanking every
-                # DATE_COLUMNS cell would wrongly drop the run date.
-                if col_name == "Matching Notes":
-                    value: object = company.get(NOTES_SOURCE_COLUMN, "")
-                elif col_name == "Reviewer Notes":
-                    value = ""  # the colleague's column; the machine never writes it
-                elif col_name == "Company ID":
-                    # A NEW company has no id yet, so propose one and store it --
-                    # otherwise the next run can only match it by name. Stored,
-                    # never recomputed.
-                    value = company.get("Company ID") or propose_company_id(company["Company / Outreach Account"])
-                elif col_name in HUMAN_COLS:
-                    # A4's defaults: no invented contact, no invented prior contact,
-                    # no guessed date, and the decision stays with a human.
-                    value = {
-                        "Contact Search Status": "Not started",
-                        "Outreach Decision": "Review",
-                        "Previously Contacted?": "To verify",
-                    }.get(col_name, "")
-                else:
-                    value = company.get(col_name, "")
-
-                cell = ws.cell(row_i, c)
+                # Ownership and date-ness are different axes -- `Last Checked` is
+                # machine-owned (A4 MACHINE_LATEST_COLS) while `First Contact
+                # Date`/`Recall` are human-owned, and all three are date columns.
+                # `values` already resolves ownership; the date handling below is
+                # the only place the two axes meet.
+                value = values.get(col_name, "")
                 if value in (None, ""):
                     continue
+                cell = ws.cell(row_i, c)
+                # Last line of defence: only empty cells are ever touched. If one
+                # is not empty the append is REFUSED, `write_atomically` leaves the
+                # file untouched, and the caller writes a sidecar -- the trade this
+                # module makes everywhere. A missed append costs one paste; a silent
+                # overwrite costs a colleague's work.
+                if _cell_conflicts(cell, value):
+                    raise synced_fs.GuardFailure(
+                        "cell_occupied",
+                        f"{col_name} at row {row_i} holds {str(cell.value)[:40]!r}, "
+                        f"refusing to overwrite it with {str(value)[:40]!r}",
+                    )
                 # Values only. Not a style, not a validation rule.
                 if col_name in DATE_COLUMNS:
                     parsed = parse_date(str(value))
@@ -1467,7 +1538,6 @@ def cmd_append(args: argparse.Namespace) -> int:
                         cell.number_format = DATE_NUMBER_FORMAT
                         continue
                 cell.value = value
-            row_i += 1
         wb.save(tmp)
 
     try:
@@ -1483,14 +1553,21 @@ def cmd_append(args: argparse.Namespace) -> int:
             w = csv.writer(fh, delimiter=";")
             w.writerow(REVIEW_COLUMNS)
             for company in to_add:
-                w.writerow([company.get(c, "") for c in REVIEW_COLUMNS])
+                # The same values the workbook path would have written, from the
+                # same function -- the two used to differ, and the sidecar silently
+                # lost Matching Notes, Contact Search Status and Company ID.
+                values = _new_company_values(company)
+                w.writerow([_sidecar_value(c, values.get(c, "")) for c in REVIEW_COLUMNS])
         summary.update(
             {
                 "appended": 0,
                 "reason": exc.reason,
                 "detail": exc.detail,
                 "sidecar": str(sidecar),
-                "note": f"nothing written to Review.xlsx; {len(to_add)} row(s) left in the sidecar",
+                "note": (
+                    f"nothing written to Review.xlsx; {len(to_add)} row(s) left in the sidecar "
+                    "(dates as YYYY-MM-DD)"
+                ),
             }
         )
         print(json.dumps(summary, indent=2, ensure_ascii=False))
