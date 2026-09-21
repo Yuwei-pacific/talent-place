@@ -61,6 +61,76 @@ export function crossPortalKey(company: string, title: string, location: string)
 }
 
 // ---------------------------------------------------------------------------
+// URL identity
+//
+// One canonical form for every dedup decision in this repo, because there were
+// three implementations and they disagreed. `dedup-cards.ts` stripped the WHOLE
+// query, so `?gh_jid=123` and `?gh_jid=456` — two different postings sharing one
+// path — collapsed into one and a role disappeared with no trace: `dedupCards`
+// has no `duplicates` list, the merged card simply is not there. `history.ts`
+// kept the whole query, so a URL that arrived with a tracking parameter never
+// matched the same URL without one.
+//
+// A4 states the rule: dedup "per URL diretto normalizzato (senza rimuovere
+// parametri identificativi dell'annuncio)". So: keep the query, minus parameters
+// that are known to carry tracking rather than identity, and sort what remains so
+// parameter ORDER cannot make two spellings of one posting look different.
+// Mirrored in `reconcile`-adjacent Python as `norm_role_url`, asserted equal in
+// test_sync_export.py the same way `norm_company` is.
+// ---------------------------------------------------------------------------
+
+/** Tracking parameters, by exact name. Anything absent and not matched by
+ *  `isTrackingParam` below is KEPT. */
+export const TRACKING_PARAMS = new Set([
+  'refid',
+  'trackingid',
+  'trk',
+  'trkinternal',
+  'originalreferer',
+  'fbclid',
+  'gclid',
+  'mc_cid',
+  'mc_eid',
+]);
+
+/**
+ * Is this query parameter tracking rather than identity?
+ *
+ * `utm` and the whole `utm_*` family are Google's campaign prefixes, matched by
+ * PREFIX because the family keeps growing (`utm_id`, `utm_source_platform`, …)
+ * and enumerating it is a list that rots. The bare `utm` counts too — some tools
+ * emit it — while `utmost` does not, which is why this is not a bare
+ * `startsWith('utm')`.
+ */
+export function isTrackingParam(key: string): boolean {
+  const k = (key || '').toLowerCase();
+  return k === 'utm' || k.startsWith('utm_') || TRACKING_PARAMS.has(k);
+}
+
+/**
+ * Canonical form of a posting URL: no fragment, no tracking parameters, sorted
+ * query, no trailing slash, lowercased.
+ *
+ * Deliberately string manipulation rather than `new URL()`: the value is a
+ * dictionary key compared against one built in another language, so it must be
+ * predictable rather than correct about every RFC detail. Percent-encoding
+ * differences between Node and Python would be a parity bug nobody would find.
+ */
+export function normalizeUrl(raw: string): string {
+  const s = (raw || '').trim().replace(/#.*$/, '');
+  if (!s) return '';
+  const q = s.indexOf('?');
+  const head = (q === -1 ? s : s.slice(0, q)).replace(/\/+$/, '');
+  if (q === -1) return head.toLowerCase();
+  const kept = s
+    .slice(q + 1)
+    .split('&')
+    .filter((p) => p && !isTrackingParam(p.split('=')[0] || ''))
+    .sort();
+  return (kept.length ? `${head}?${kept.join('&')}` : head).toLowerCase();
+}
+
+// ---------------------------------------------------------------------------
 // Reading the canonical CSV's multi-value cells.
 //
 // There is deliberately NO single universal splitter. The separators in the

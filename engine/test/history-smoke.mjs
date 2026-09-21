@@ -100,6 +100,34 @@ assert.equal(
 );
 
 // ---------------------------------------------------------------------------
+// Invariant: a tracking parameter must not make a known URL look new.
+//
+// `history.ts` kept the whole query while `dedup-cards.ts` stripped it, so one
+// run held two opinions about what a URL was, and the same posting reached
+// through a campaign link read as a different role.
+//
+// The URL below comes FROM history and is fed back with tracking appended, so
+// only the normalisation can make it match — which is the point.
+// ---------------------------------------------------------------------------
+// A URL that carries no query of its own, so appending one is unambiguous. Some
+// history URLs do have a query, and appending a second "?" to those would be
+// testing the append rather than the normalisation.
+let probe = null;
+for (const [, entry] of h) {
+  const clean = [...entry.urls].find((u) => !u.includes('?'));
+  if (clean) {
+    probe = { company: entry.company, url: clean };
+    break;
+  }
+}
+assert.ok(probe, 'expected some history URL with no query to append tracking to');
+assert.equal(
+  checkDup(h, probe.company, 'anything', 'Milan', `${probe.url}?utm_source=linkedin&trackingId=abc`).dup,
+  true,
+  `a known URL carrying campaign parameters must still dedup (${probe.url})`,
+);
+
+// ---------------------------------------------------------------------------
 // Invariant: the seat suffix in `Matching Job Titles` must not break the key.
 //
 // History rows store "<Title> — <Location>". The role key is built from the bare

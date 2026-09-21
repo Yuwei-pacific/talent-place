@@ -33,6 +33,7 @@ from sync_export import (  # noqa: E402
     CF_RANGE_ROWS,
     NOT_RECOVERABLE_FROM_FLAT_TSV,
     StageError,
+    TRACKING_PARAMS,
     load_evidence,
     norm_role_url,
     REVIEW_COLUMNS,
@@ -480,6 +481,72 @@ class TestSplitter(TmpDirCase):
             if py_val != ts_val:
                 mismatches.append(f"  col={col!r} val={val[:50]!r}\n    py={py_val}\n    ts={ts_val}")
         self.assertEqual(mismatches, [], "TS/Python splitter drift:\n" + "\n".join(mismatches))
+
+    def test_norm_role_url_keeps_identity_and_drops_tracking(self):
+        """The query is not noise. Part of it names the posting.
+
+        `?gh_jid=123` and `?gh_jid=456` are two different roles on one path.
+        Stripping the whole query — which `dedup-cards.ts` did, and which this
+        used to do — merges them, and the merge leaves no trace: a merged card is
+        simply absent, so the role disappears silently.
+        """
+        # Identity survives, and two ids stay two postings.
+        self.assertNotEqual(
+            norm_role_url("https://x.test/jobs/1?gh_jid=123"),
+            norm_role_url("https://x.test/jobs/1?gh_jid=456"),
+        )
+        # Tracking does not, and parameter order cannot matter.
+        for with_noise in (
+            "https://x.test/jobs/1?utm_source=linkedin&gh_jid=123",
+            "https://x.test/jobs/1?gh_jid=123&trackingId=abc",
+        ):
+            self.assertEqual(norm_role_url(with_noise), norm_role_url("https://x.test/jobs/1?gh_jid=123"), with_noise)
+        self.assertEqual(
+            norm_role_url("https://x.test/jobs/1?b=2&a=1"),
+            norm_role_url("https://x.test/jobs/1?a=1&b=2"),
+            "parameter order must not change the key",
+        )
+        # A fragment is never identity; a trailing slash is not either.
+        self.assertEqual(norm_role_url("https://x.test/jobs/1#apply"), norm_role_url("https://x.test/jobs/1"))
+        self.assertEqual(norm_role_url("https://x.test/jobs/1/"), norm_role_url("https://x.test/jobs/1"))
+        # A query of nothing but tracking is the same as no query at all.
+        self.assertEqual(norm_role_url("https://x.test/jobs/1?utm_source=x"), norm_role_url("https://x.test/jobs/1"))
+
+    def test_norm_role_url_parity_with_typescript(self):
+        """Two languages build one dictionary key. Both the set and the function."""
+        if not TS_LIB.exists() or shutil.which("node") is None:
+            self.skipTest("TS build or node unavailable")
+        script = (
+            'import("./lib/normalize.js").then(({normalizeUrl, TRACKING_PARAMS}) => {'
+            '  const urls = JSON.parse(process.argv[1]);'
+            "  console.log(JSON.stringify({params: [...TRACKING_PARAMS].sort(), urls: urls.map(normalizeUrl)}));"
+            "});"
+        )
+        urls = [
+            "https://x.test/jobs/1",
+            "https://x.test/jobs/1/",
+            "https://X.TEST/Jobs/1",
+            "https://x.test/jobs/1?gh_jid=123",
+            "https://x.test/jobs/1?gh_jid=456",
+            "https://x.test/jobs/1?utm_source=linkedin&gh_jid=123",
+            "https://x.test/jobs/1?gh_jid=123&utm_source=linkedin",
+            "https://x.test/jobs/1?utm=abc&gh_jid=123",
+            "https://x.test/jobs/1?utm_id=9&gh_jid=123",
+            "https://x.test/jobs/1?utmost=1",
+            "https://x.test/jobs/1?b=2&a=1",
+            "https://x.test/jobs/1?a=1&b=2",
+            "https://x.test/jobs/1#apply",
+            "https://x.test/jobs/1?utm_source=x",
+            "https://x.test/jobs/1?",
+            "",
+            "not a url",
+        ]
+        proc = subprocess.run(["node", "-e", script, json.dumps(urls)], cwd=str(ENGINE), capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr[:400])
+        ts = json.loads(proc.stdout.strip().splitlines()[-1])
+        self.assertEqual(sorted(TRACKING_PARAMS), ts["params"], "the tracking sets must match exactly")
+        for url, ts_val in zip(urls, ts["urls"]):
+            self.assertEqual(norm_role_url(url), ts_val, f"norm_role_url drift on {url!r}")
 
     def test_norm_company_parity_with_typescript(self):
         if not TS_LIB.exists() or shutil.which("node") is None:

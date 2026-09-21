@@ -217,11 +217,58 @@ EVIDENCE_COLUMNS = ["url", "posted", "alternate_urls", "search_query"]
 CHECK_COLUMNS = ["url", "label", "status", "reachable", "has_apply", "has_intern_signal", "title", "detail", "elapsed_ms"]
 
 
+# Tracking parameters, by exact name. Anything absent and not matched by
+# _is_tracking below is KEPT. Mirrors TRACKING_PARAMS in engine/src/normalize.ts —
+# `test_sync_export.py` asserts the two are equal, the same way it does for
+# MULTI_VALUE_SPEC and norm_company.
+TRACKING_PARAMS = frozenset({
+    "refid",
+    "trackingid",
+    "trk",
+    "trkinternal",
+    "originalreferer",
+    "fbclid",
+    "gclid",
+    "mc_cid",
+    "mc_eid",
+})
+
+
+def _is_tracking(key: str) -> bool:
+    """Is this query parameter tracking rather than identity?
+
+    `utm` and the whole `utm_*` family are Google's campaign prefixes, matched by
+    PREFIX because the family keeps growing (`utm_id`, `utm_source_platform`, …)
+    and enumerating it is a list that rots. The bare `utm` counts too — some tools
+    emit it — while `utmost` does not, which is why this is not a bare
+    `startswith("utm")`.
+    """
+    k = (key or "").lower()
+    return k == "utm" or k.startswith("utm_") or k in TRACKING_PARAMS
+
+
 def norm_role_url(url: str) -> str:
-    """Match the engine's normUrl: drop the query string and trailing slashes,
-    lowercase. A run's URL and the TSV's must land on the same key even when
-    one carries campaign parameters."""
-    return (url or "").strip().split("?")[0].rstrip("/").lower()
+    """Canonical form of a posting URL. Mirrors `normalizeUrl()` in
+    engine/src/normalize.ts, so a run's URL and the TSV's land on the same key.
+
+    String manipulation rather than `urlparse`, deliberately: the value is a
+    dictionary key compared against one built in another language, so it has to be
+    predictable rather than correct about every RFC detail. Percent-encoding
+    differences between Node and Python would be a parity bug nobody would find.
+
+    Keeps the query, minus tracking. `?gh_jid=123` and `?gh_jid=456` are two
+    different postings on one path, and dropping the whole query merges them —
+    silently, because a merged card leaves no trace.
+    """
+    s = (url or "").strip().split("#", 1)[0]
+    if not s:
+        return ""
+    head, sep, query = s.partition("?")
+    head = head.rstrip("/")
+    if not sep:
+        return head.lower()
+    kept = sorted(p for p in query.split("&") if p and not _is_tracking(p.split("=")[0]))
+    return (f"{head}?{'&'.join(kept)}" if kept else head).lower()
 
 
 def _read_sidecar(path: Path, columns: list[str]) -> dict:

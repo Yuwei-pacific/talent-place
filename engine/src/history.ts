@@ -1,7 +1,7 @@
 // History = canonical Excel/CSV (semicolon-delimited, A4 columns).
 // Read-only for search; add-verified is the only writer.
 import { readFileSync } from 'node:fs';
-import { crossPortalKey, normCompany, splitColumn } from './normalize.js';
+import { crossPortalKey, normCompany, normalizeUrl, splitColumn } from './normalize.js';
 
 export interface HistoryEntry {
   company: string;
@@ -34,9 +34,9 @@ function splitCsvLine(line: string): string[] {
   return out;
 }
 
-function normUrl(u: string): string {
-  return u.trim().replace(/\/+$/, '').toLowerCase();
-}
+// URL identity comes from `normalize.ts`, shared with `dedupCards` and mirrored
+// in Python. A local copy here kept the query while `dedupCards` stripped it, so
+// one run disagreed with itself about what the same URL was.
 
 /**
  * `Matching Job Titles` holds "<Title> — <Location>", because that is how a run
@@ -116,7 +116,7 @@ export function loadHistory(csvPath: string): Map<string, HistoryEntry> {
       entry = { company, companyId: iCompanyId >= 0 ? (cols[iCompanyId] || '').trim() || undefined : undefined, urls: new Set(), keys: new Set() };
       byCompany.set(key, entry);
     }
-    for (const l of links) entry.urls.add(normUrl(l));
+    for (const l of links) entry.urls.add(normalizeUrl(l));
     titles.forEach((t, idx) => {
       if (t) entry!.keys.add(crossPortalKey(company, stripSeatSuffix(t), locs[idx] || locs[0] || ''));
     });
@@ -136,7 +136,7 @@ export function checkDup(
   // Normalised, to match how `loadHistory` keys the map — see the note there.
   const entry = history.get(normCompany(company));
   if (!entry) return { dup: false, companyKnown: false };
-  if (entry.urls.has(normUrl(url))) return { dup: true, reason: 'same URL in history' };
+  if (entry.urls.has(normalizeUrl(url))) return { dup: true, reason: 'same URL in history' };
   if (entry.keys.has(crossPortalKey(company, title, location))) {
     return { dup: true, reason: 'same company+title+location in history' };
   }

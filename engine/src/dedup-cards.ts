@@ -2,10 +2,7 @@
 // (query x location) fan-out. Merge before scoring so duplicates never
 // consume top-K slots or detail budget.
 import type { Card } from './types.js';
-
-function normUrl(u: string): string {
-  return u.trim().split('?')[0].replace(/\/+$/, '').toLowerCase();
-}
+import { normalizeUrl } from './normalize.js';
 
 /** Merge same-POSTING cards; keep the longest snippet, union discovery queries.
  *
@@ -17,7 +14,7 @@ export function dedupCards(cards: Card[]): { unique: Card[]; dupCount: number } 
   const byUrl = new Map<string, Card>();
   let dupCount = 0;
   for (const c of cards) {
-    const key = c.sourceJobId ? `${c.source}:${c.sourceJobId}` : `url:${normUrl(c.url)}`;
+    const key = c.sourceJobId ? `${c.source}:${c.sourceJobId}` : `url:${normalizeUrl(c.url)}`;
     const prev = byUrl.get(key);
     if (!prev) {
       byUrl.set(key, c);
@@ -30,7 +27,7 @@ export function dedupCards(cards: Card[]): { unique: Card[]; dupCount: number } 
       : `${prev.discoveryQuery} + ${c.discoveryQuery}`;
     // Every URL seen for this posting except the survivor's, deduped.
     const alternates = [...new Set([...(prev.alternateUrls ?? []), ...(c.alternateUrls ?? []), c.url])].filter(
-      (u) => normUrl(u) !== normUrl(prev.url),
+      (u) => normalizeUrl(u) !== normalizeUrl(prev.url),
     );
     byUrl.set(key, { ...prev, snippet, discoveryQuery: dq, alternateUrls: alternates });
   }
