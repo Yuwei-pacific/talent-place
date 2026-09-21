@@ -754,6 +754,31 @@ class TestReviewWorkbook(TmpDirCase):
             self.assertEqual((cell.value.year, cell.value.month, cell.value.day), expect)
             self.assertEqual(cell.number_format, "DD/MM/YYYY")
 
+    def test_the_status_dropdown_actually_rejects_a_value_outside_the_list(self):
+        """A list validation with `showErrorMessage=False` only OFFERS values.
+
+        openpyxl defaults that flag to False, so Excel accepted anything typed
+        and said nothing: the sheet looked protected and was not. It matters
+        because an unrecognised value is then invisible twice over — it matches
+        no conditional-formatting rule (those are exact-equality), so the row
+        stays white, which is exactly what `Not started` looks like.
+        """
+        self.init()
+        from openpyxl import load_workbook
+
+        ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
+        rules = list(ws.data_validations.dataValidation)
+        self.assertTrue(rules, "expected the status dropdown to be installed")
+        dv = next((d for d in rules if "Not started" in (d.formula1 or "")), None)
+        self.assertIsNotNone(dv, "no dropdown found for Contact Search Status")
+        self.assertTrue(dv.showErrorMessage, "the dropdown would accept any value silently")
+        self.assertEqual(dv.errorStyle, "stop")
+        col = get_column_letter(REVIEW_COLUMNS.index("Contact Search Status") + 1)
+        self.assertTrue(
+            str(dv.sqref).startswith(f"{col}3:"),
+            f"dropdown covers {dv.sqref}, not column {col}",
+        )
+
     def test_unparseable_date_is_reported_not_silently_converted(self):
         p = self.make_canon()
         text = p.read_text(encoding="utf-8").replace("2026-09-15", "Brands / Business Units")

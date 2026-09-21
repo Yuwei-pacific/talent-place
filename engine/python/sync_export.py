@@ -14,9 +14,6 @@ Ownership is split by FILE, not by sheet:
 `Roles.xlsx` is NOT a "pending review file" that someone merges — nothing is
 ever merged. It is a rendering. That is what keeps it out of the anti-pattern
 where a human must hand-merge a machine file back into the main one.
-
-Commands implemented so far: `doctor`, `stage` (Step A). The rest of the CLI
-surface is declared but refuses with a clear message until its step lands.
 """
 from __future__ import annotations
 
@@ -914,7 +911,19 @@ def _write_review_header(ws) -> None:
 
 
 def _apply_review_validation(ws) -> None:
-    """Dropdowns, so colleagues pick a value instead of typing one."""
+    """Dropdowns, so colleagues pick a value instead of typing one.
+
+    `showErrorMessage=True` is load-bearing, not decoration. openpyxl defaults it
+    to False, and with that default Excel ACCEPTS an out-of-list entry and says
+    nothing — the cell merely gets no dropdown suggestion. Measured against
+    openpyxl 3.1.5. Without it the sheet looked protected and was not, and an
+    unrecognised value is invisible in a second way too: the conditional
+    formatting matches exactly, so a value outside the vocabulary matches no rule
+    and the row stays white, which is what `Not started` looks like.
+
+    (`showDropDown=False` reads backwards but is correct: in OOXML
+    `showDropDown="1"` means HIDE the in-cell dropdown.)
+    """
     from openpyxl.utils import get_column_letter
     from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -924,6 +933,10 @@ def _apply_review_validation(ws) -> None:
             formula1='"' + ",".join(options) + '"',
             allow_blank=True,
             showDropDown=False,
+            showErrorMessage=True,
+            errorStyle="stop",
+            errorTitle="Valore non ammesso",
+            error="Scegliete un valore dal menu a tendina: la riga si colora in base a questo campo.",
         )
         ws.add_data_validation(dv)
         letter = get_column_letter(REVIEW_COLUMNS.index(col_name) + 1)
@@ -1616,14 +1629,6 @@ def cmd_harvest(args: argparse.Namespace) -> int:
         out["conflict_detail"] = h["conflicts"][:40]
     print(json.dumps(out, indent=2, ensure_ascii=False))
     return 0
-
-
-def _not_implemented(step: str):
-    def run(_args: argparse.Namespace) -> int:
-        print(json.dumps({"ok": False, "error": f"not implemented yet ({step})"}, ensure_ascii=False))
-        return 2
-
-    return run
 
 
 def main() -> int:
