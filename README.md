@@ -17,10 +17,9 @@ talent-place/
 │   │   └── A3-cohort.yaml                 # uno per edizione (history_file -> il Review.xlsx del Master)
 │   └── Accessory design ED.14/            # stesso schema
 ├── archive/                     # chiusi/ritirati: niente qui è un input dell'agent
-│   ├── 2026-09-16-status-vocabulary-proposal.md
-│   ├── Strategic_Design_Company_Index.csv   # vecchio canonical, fermo a 118 aziende
+│   ├── 2026-09-16-status-vocabulary-proposal.md  # proposta chiusa: le regole stanno in A4
 │   ├── Accessory_Design_Company_Index.csv
-│   ├── company-aliases.csv                  # stava dove nessuno lo leggeva
+│   ├── company-aliases.csv                  # stub vuoto: nessun alias registrato
 │   ├── duplicate-names-report.csv
 │   └── run-2026-09-17-strategic-design-ED28.tsv
 ├── engine/                      # job-engine
@@ -184,20 +183,15 @@ Un Master diverso = una cartella sincronizzata diversa (`--dir`) e il suo `histo
 
 Nessuno di questi viene risolto automaticamente: servono i dati storici.
 
-- **5 nomi su due righe ciascuno** (`JAKALA`, `KPMG`, `NTT DATA`, `PwC`,
-  `TeamViewer`), più **una riga orfana** (indice 82: solo
-  `First Contact Date = 03/09/2026`, senza azienda, fra `Logotel` e `Doctolib`).
-  Dettagli in `archive/duplicate-names-report.csv`.
-- **Due righe corrotte da un incolla** (`Bain & Company`, `Moncler`): le colonne
-  `Verification Status` e `Last Checked` contengono i valori della riga
-  successiva o testo di intestazione. Segnalate da `doctor` e da `init-review`.
-- **`Moncler Group`** (da un giro) contro **`Moncler`** (canonical): stessa
-  azienda? Si decide in `company-aliases.csv` nella radice di `jobSearch_outPut/` (dove il codice lo cerca), non con una euristica.
-- *(risolto il 2026-09-18)* La proposta sul vocabolario è **chiusa** e spostata in
-  `archive/2026-09-16-status-vocabulary-proposal.md`: la Modifica 1 era già in
-  vigore, la Modifica 2 (stato derivato) è stata superata dalla scelta di uno
-  stato memorizzato. Il vocabolario sta ora in A4. Il file resta per il
-  ragionamento sulle alternative scartate, non per le regole.
+**L'elenco non è qui.** Sta nel progetto Linear *Polidesign_JobSearch engine*
+(team `YUW`), insieme al resto del lavoro aperto su questo repo. Prima stava in
+questo file **e** in `CLAUDE.md`, in inglese, e i due erano già divergenti:
+un elenco che descrive dei dati — quante righe, quali aziende — può solo
+invecchiare, quindi sta dove ha uno stato e un responsabile.
+
+Il codice non indovina nessuno di quei casi: un quasi-duplicato viene **rinviato**,
+un aggiornamento ambiguo viene **rifiutato**, un valore illeggibile viene
+**segnalato e lasciato visibile**.
 
 ## Test
 

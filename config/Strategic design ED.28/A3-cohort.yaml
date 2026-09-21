@@ -11,13 +11,13 @@ updated_on: "2026-09-10"
 # il file che i colleghi mantengono davvero. Il giro lo legge convertendolo:
 #   python3 engine/python/sync_export.py export-history --dir "<cartella>" --out <csv>
 # (il CLI TypeScript non legge xlsx: il motore non ha dipendenze).
-# Il vecchio canonical (index/Strategic_Design_Company_Index.csv) e' in archive/:
-# era fermo a 118 aziende mentre Review ne ha 180, quindi non era piu' lo storico.
+# Il vecchio canonical (index/..._Company_Index.csv) e' stato eliminato, non
+# archiviato: era fermo a 118 aziende, quindi non era piu' lo storico.
 #
 # First Contact Date (col 21) e Recall (col 22) restano di proprieta' umana.
-# Company ID e' un'identita' stabile, assegnata una volta e mai ricalcolata: 5 nomi
-# compaiono su due righe e condividono un id proposto, quindi restano ambigui
-# finche' una persona non li risolve.
+# Company ID e' un'identita' stabile, assegnata una volta e mai ricalcolata: dove un
+# nome compare su due righe, entrambe condividono un id proposto e restano ambigue
+# finche' una persona non le risolve.
 history_file: "../../../jobSearch_outPut/Strategic design ED.28/Review.xlsx"
 previous_reports: []
 previous_contact_list: null
