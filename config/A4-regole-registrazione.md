@@ -12,6 +12,8 @@ Stesso ruolo già presente: non riproporlo. Stessa azienda con ruolo nuovo: prod
 
 Raggruppare per azienda/unità di contatto. Mantenere brand e business unit; non fondere automaticamente tutte le società di un gruppo senza conferma della referente di contatto comune. Conservare evidenze separate per ciascun ruolo e tutte le fonti realmente consultate.
 
+`Company / Outreach Account` è **l’azienda che assume**. Una pagina aggregata — LinkedIn Jobs, Indeed, BoF Careers, un job board di terzi, una testata o un servizio di collocamento che ripubblica annunci — è una fonte di scoperta e va in `Sources / Portals`, mai qui. Se un ruolo è stato trovato su un aggregatore, risalire all’azienda reale e usarla come account; se non è identificabile con certezza, tenere il candidato fra i non risolti invece di attribuirlo all’aggregatore.
+
 ## Contatti e decisioni
 
 Essere presenti nel Company Index non significa essere già stati contattati. `Previously Contacted?` va ricavato da prove storiche esplicite. Assenza di storico o valori contraddittori: `To verify`, con nota sul conflitto. Se due campi dello stesso account si contraddicono (es. `Previously Contacted? = No` e `Contact Search Status = Contact found`), non scegliere un lato: verificare prima dell’outreach.

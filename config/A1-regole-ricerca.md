@@ -24,6 +24,8 @@ Esplorare tutte le aree pertinenti del profilo, nelle lingue e nelle geografie a
 
 Cercare su LinkedIn Jobs, Indeed e siti ufficiali delle aziende. Pagine aggregate e motori di ricerca servono a scoprire e incrociare le opportunità. Il sito ufficiale del datore, compreso un ATS collegato dalla sua pagina Careers, è preferito per confermare stato e candidatura. Una pagina Careers generica non prova l’esistenza di un ruolo specifico.
 
+**Una pagina aggregata è una fonte di scoperta, non un datore di lavoro.** Vale per LinkedIn Jobs, Indeed, BoF Careers, un job board di terzi, una testata o un’università che ripubblica annunci. Quando un ruolo viene trovato lì, risalire all’azienda che assume e trattare quella come il soggetto del contatto: l’aggregatore resta registrato come fonte. Se il datore non è identificabile con certezza, il candidato resta non risolto — attribuirlo all’aggregatore rompe il raggruppamento per azienda e la deduplicazione storica, che sono per azienda.
+
 Per Indeed verificare prima se il connettore è effettivamente disponibile. Se disponibile, usarlo; poi verificare presso il datore. Se assente, in errore o senza permessi, usare la ricerca sulle pagine pubbliche Indeed e dichiarare il motivo. Non installare un connettore solo per soddisfare questa regola. Se anche la via pubblica è bloccata, dichiararlo e continuare sulle altre fonti.
 
 Non aggirare login, CAPTCHA o limitazioni. Una sintesi nei risultati di ricerca non equivale a una pagina verificata. Distinguere fonte che ha scoperto il ruolo, fonte di verifica e link di candidatura. Il report deve contabilizzare Indeed anche quando l’URL principale è aziendale; dettagli nel modulo A4.
