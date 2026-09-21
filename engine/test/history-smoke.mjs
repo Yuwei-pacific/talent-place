@@ -162,6 +162,56 @@ assert.deepEqual(
     `(checkDup only matches their URL):\n${unreachable.slice(0, 5).join('\n')}`,
 );
 
+// ---------------------------------------------------------------------------
+// Invariant: a spelling variant of a KNOWN company must still dedup.
+//
+// The map was keyed on `toLowerCase()` while every role key inside an entry is
+// built with `normCompany` — which strips legal suffixes and folds accents. So
+// "Acme S.p.A." and "Acme" were two entries on the outside and one key shape on
+// the inside: the lookup missed, and the comparison written for exactly this
+// case never ran. Measured before the fix, feeding the Accenture row's own URL
+// back in under a suffixed spelling:
+//
+//     checkDup(h, "ACCENTURE S.P.A.", …, <a URL taken from history>)
+//       -> {"dup": false, "companyKnown": false}
+//
+// Same URL, same company, reported as new — and not even as a known company.
+//
+// The seat-suffix invariant above cannot see this class: it starts from the
+// cell's own spelling, so the lookup always succeeded. This one starts from a
+// second spelling of the same name, which is what a portal actually returns.
+// ---------------------------------------------------------------------------
+const accentureUrl = [...accenture.urls][0];
+assert.equal(
+  checkDup(h, 'ACCENTURE S.P.A.', 'anything', 'Milan', accentureUrl).dup,
+  true,
+  'a legal-suffix variant with the same URL must dedup',
+);
+
+// With a role history has never seen, the variant must still be recognised as a
+// KNOWN company — that is what stops a run from proposing it as `[NEW COMPANY]`
+// and, with it, a second row for a company that already has one.
+const variantNewRole = checkDup(h, 'ACCENTURE S.P.A.', 'Quantum Gardening Intern', 'Milan', 'https://example.com/never-seen');
+assert.equal(variantNewRole.dup, false);
+assert.equal(variantNewRole.companyKnown, true, 'a variant spelling is still a company we know');
+
+// By role key alone, on a URL history has never seen, so the key has to do the
+// work rather than the URL shortcut.
+assert.equal(
+  checkDup(h, 'Accenture S.p.A.', title, city, 'https://example.com/never-seen').dup,
+  true,
+  'a variant spelling must dedup on company+title+city, not only on an exact URL',
+);
+
+// The other half: normalising strips legal suffixes, not distinguishing words.
+// `Accenture Italia` is a real value in this history (as a brand), so it is the
+// honest neighbour to test against rather than an invented one.
+assert.equal(
+  checkDup(h, 'Accenture Italia', title, city, 'https://example.com/never-seen').dup,
+  false,
+  'stripping a legal suffix must not merge two genuinely different names',
+);
+
 console.log(
   `history-smoke: OK (${h.size} companies, ${checked} URLs round-tripped, ${rolesSeen} role keys reachable)`,
 );

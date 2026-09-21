@@ -1,7 +1,7 @@
 // History = canonical Excel/CSV (semicolon-delimited, A4 columns).
 // Read-only for search; add-verified is the only writer.
 import { readFileSync } from 'node:fs';
-import { crossPortalKey, splitColumn } from './normalize.js';
+import { crossPortalKey, normCompany, splitColumn } from './normalize.js';
 
 export interface HistoryEntry {
   company: string;
@@ -102,7 +102,15 @@ export function loadHistory(csvPath: string): Map<string, HistoryEntry> {
     const titles = splitColumn(cols[iTitles] || '', 'Matching Job Titles');
     const links = splitColumn(cols[iLinks] || '', 'Job Links');
     const locs = splitColumn(cols[iLocs] || '', 'Locations');
-    const key = company.toLowerCase();
+    // Keyed on the NORMALISED name, not on `toLowerCase()`.
+    //
+    // The role keys inside an entry are built with `crossPortalKey`, which
+    // normalises — strips legal suffixes, folds accents. A lookup that did not
+    // normalise therefore could not reach them: "Acme S.p.A." and "Acme" are one
+    // key on the inside and were two entries on the outside, so the comparison
+    // written to catch exactly that never ran. Per-company normalisation now
+    // happens once, at the boundary, and both sides agree by construction.
+    const key = normCompany(company);
     let entry = byCompany.get(key);
     if (!entry) {
       entry = { company, companyId: iCompanyId >= 0 ? (cols[iCompanyId] || '').trim() || undefined : undefined, urls: new Set(), keys: new Set() };
@@ -125,7 +133,8 @@ export function checkDup(
   location: string,
   url: string,
 ): DupVerdict {
-  const entry = history.get(company.toLowerCase());
+  // Normalised, to match how `loadHistory` keys the map — see the note there.
+  const entry = history.get(normCompany(company));
   if (!entry) return { dup: false, companyKnown: false };
   if (entry.urls.has(normUrl(url))) return { dup: true, reason: 'same URL in history' };
   if (entry.keys.has(crossPortalKey(company, title, location))) {
