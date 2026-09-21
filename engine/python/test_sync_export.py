@@ -887,11 +887,10 @@ class TestReviewWorkbook(TmpDirCase):
     def test_doctor_reports_a_value_outside_its_closed_set(self):
         """The rule `stage` applies to TSV rows, applied to the workbook.
 
-        Motivated by measurement, not by worry: on 2026-09-21 this reports 105 of
-        164 rows in the live workbook, whose `Verification Status` is prose rather
-        than one of A4's five values and which nothing had ever flagged. `stage`
-        validates only what it is handed, so the file colleagues edit was the one
-        place where a closed set was not closed.
+        `Contact Search Status` is the structural one: the axis the whole row is
+        coloured by, closed "di proposito" in A4, and enforced on entry by the
+        dropdown. A value outside it turns the row white, which reads as
+        `Not started`, and nothing reported that before this check existed.
         """
         self.init()
         from openpyxl import load_workbook
@@ -899,10 +898,8 @@ class TestReviewWorkbook(TmpDirCase):
         wb = load_workbook(self.tmp / "Review.xlsx")
         ws = wb["Review"]
         header = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
-        # An A4 value followed by free detail is legal; the bare detail is not.
-        ws.cell(3, header.index("Verification Status") + 1, "LinkedIn evidence captured; employer page not verified")
         # `Contacted` is a superseded value: A4 lists it under LEGACY_CONTACT_STATUS.
-        ws.cell(4, header.index("Contact Search Status") + 1, "Contacted")
+        ws.cell(3, header.index("Contact Search Status") + 1, "Contacted")
         wb.save(self.tmp / "Review.xlsx")
 
         proc = self.run_cmd("doctor", "--dir", str(self.tmp))
@@ -910,9 +907,33 @@ class TestReviewWorkbook(TmpDirCase):
             "Review.xlsx closed-set columns hold A4's values"
         ]
         self.assertFalse(found["ok"])
-        self.assertIn("Verification Status", found["detail"])
         self.assertIn("Contact Search Status", found["detail"])
         self.assertIn("Alpha Srl", found["detail"])
+
+    def test_doctor_does_not_fail_on_the_reference_column(self):
+        """`Verification Status` in the workbook is a reference, not a filter.
+
+        A4 gives it a closed set too, but that governs what a RUN produces —
+        `stage` enforces it on the TSV. The workflow does not select or group on
+        the workbook's copy, so the 71 prose values in the live sheet are left
+        alone. Checking them here reported 71 failures with nothing wrong, and a
+        check that is always red is how an exit code stops being read.
+        """
+        self.init()
+        from openpyxl import load_workbook
+
+        wb = load_workbook(self.tmp / "Review.xlsx")
+        ws = wb["Review"]
+        header = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
+        ws.cell(3, header.index("Verification Status") + 1, "LinkedIn evidence captured; employer page not verified")
+        wb.save(self.tmp / "Review.xlsx")
+
+        proc = self.run_cmd("doctor", "--dir", str(self.tmp))
+        checks = {c["check"]: c for c in json.loads(proc.stdout)["checks"]}
+        self.assertTrue(
+            checks["Review.xlsx closed-set columns hold A4's values"]["ok"],
+            "a reference column must not make doctor fail",
+        )
 
     def test_doctor_treats_an_empty_closed_set_cell_as_not_stated(self):
         """Empty is what A4 uses for "not stated", so it is not a problem.

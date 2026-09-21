@@ -393,21 +393,27 @@ def validate_rows(header: list[str], rows: list[list[str]]) -> list[str]:
 def workbook_problems(header: list, rows: list[list]) -> list[str]:
     """Closed-set columns in the workbook holding a value outside their set.
 
-    The same two constants `validate_rows` applies to TSV rows, and deliberately
-    the same wording, applied to the file that outlives a run. `stage` only ever
-    validates what it is handed, so a value that arrives by paste, by a script, or
-    in a file written before a rule changed was invisible to everything.
+    `Contact Search Status` ONLY, and that restriction is the point.
 
-    Motivated by a measurement rather than a worry: on 2026-09-21 this reports 105
-    of 164 rows in the live workbook, plus two cells a paste had shifted out of
-    their column years earlier and which nothing had detected since.
+    `Contact Search Status` is structural: it is the axis the whole row is
+    coloured by, A4 calls its list closed *"di proposito"*, and the dropdown
+    enforces it on entry. A value outside it is a fault, and the wording here is
+    deliberately `validate_rows`' wording so one fault reads the same from `stage`
+    and from `doctor`.
 
-    Empty cells are fine and never reported — an empty cell says "not stated",
-    which A4 allows. `rows` are raw cell values; dates are stringified here.
+    `Verification Status` is A4's closed set too — but for what a RUN produces.
+    `stage` enforces it on the TSV, which is the output contract. In the workbook
+    the column is a REFERENCE: the workflow does not select, group or filter on
+    it, and Talent Placement has said so explicitly. Checking it here reported 71
+    of 164 rows as failures while nothing was wrong, and a check that is
+    permanently red is how its exit code — the signal that says "do not run the
+    publish commands" — becomes noise. The 71 rows were left as they are, on
+    purpose; see YUW-60.
+
+    Empty cells are fine and never reported: an empty cell says "not stated",
+    which A4 allows. `rows` are raw cell values; values are stringified here.
     """
     checks = (
-        ("Verification Status", lambda v: v.startswith(VERIFICATION_PREFIXES),
-         ", ".join(p.split()[0] for p in VERIFICATION_PREFIXES)),
         ("Contact Search Status", lambda v: v in CONTACT_STATUS_VALUES, str(sorted(CONTACT_STATUS_VALUES))),
     )
     out: list[str] = []
