@@ -31,6 +31,7 @@ from datetime import datetime  # noqa: E402
 from sync_export import (  # noqa: E402
     A4_COLUMNS,
     CF_RANGE_ROWS,
+    CONTACT_STATUS_VALUES,
     NOT_RECOVERABLE_FROM_FLAT_TSV,
     StageError,
     TRACKING_PARAMS,
@@ -878,7 +879,10 @@ class TestReviewWorkbook(TmpDirCase):
         # own background -- the default costs nothing to maintain.
         self.assertIn(row_range, by_range, f"expected a whole-row rule on {row_range}, got {sorted(by_range)}")
         formulas = by_range[row_range]
-        self.assertEqual(len(formulas), 4, f"one rule per coloured status, got {formulas}")
+        # Four exact-match rules, plus a fifth that reddens any status outside
+        # the closed set -- see
+        # test_color_reddens_a_status_outside_the_closed_set.
+        self.assertEqual(len(formulas), 5, f"four statuses plus the fallback, got {formulas}")
         for value in ("Job not suitable", "Potential contact", "Contact found", "Job found"):
             self.assertIn(f'${status}3="{value}"', formulas)
         self.assertNotIn(
@@ -897,6 +901,41 @@ class TestReviewWorkbook(TmpDirCase):
         # Recall keeps its own two rules, on its own column.
         recall = get_column_letter(header.index("Recall") + 1)
         self.assertIn(f"{recall}2:{recall}{CF_RANGE_ROWS}", by_range)
+
+    def test_color_reddens_a_status_outside_the_closed_set(self):
+        # White is the sheet's own background and "Not started" deliberately has
+        # no rule, so without a fallback a value outside the closed set is
+        # indistinguishable from "Not started": a row someone has worked on
+        # reads as untouched. The fallback makes it loud instead.
+        self.init()
+        self.assertEqual(self.run_cmd("color", "--dir", str(self.tmp)).returncode, 0)
+
+        from openpyxl import load_workbook
+
+        ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
+        header = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
+        by_range: dict[str, list[str]] = {}
+        for rng, rules in ws.conditional_formatting._cf_rules.items():
+            by_range[str(rng.sqref)] = [r.formula[0] for r in rules]
+
+        status = get_column_letter(header.index("Contact Search Status") + 1)
+        last = get_column_letter(len(REVIEW_COLUMNS))
+        formulas = by_range[f"A3:{last}{CF_RANGE_ROWS}"]
+
+        # Last, so the four exact-match rules keep priority over it.
+        fallback = formulas[-1]
+        self.assertIn(
+            f'${status}3<>""',
+            fallback,
+            "the fallback must leave an empty status alone: A4 uses empty for 'not stated'",
+        )
+        for value in CONTACT_STATUS_VALUES:
+            self.assertIn(
+                f'${status}3<>"{value}"',
+                fallback,
+                "the exclusion list must be derived from CONTACT_STATUS_VALUES, so adding a "
+                "status to the vocabulary cannot silently start rendering it as a mistake",
+            )
 
     def test_color_is_idempotent(self):
         self.init()

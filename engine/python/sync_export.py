@@ -981,10 +981,32 @@ def _install_color_rules(ws, columns: list[str]) -> list[str]:
                 stopIfTrue=False,
             ),
         )
+
+    # The fallback, added last so the exact-match rules above keep priority.
+    #
+    # Every rule above is exact-equality, so a value matching none of them fell
+    # through to the sheet's own white -- the same white a "Not started" row has.
+    # A status that was mistyped, pasted in (Excel's list validation does not run
+    # on paste), or written by an older tool therefore read as untouched. This
+    # makes it loud instead.
+    #
+    # The exclusion list is built from CONTACT_STATUS_VALUES rather than written
+    # out, so adding a status to the vocabulary cannot silently start reddening
+    # it. Empty is exempt on purpose: A4 uses an empty status for "not stated",
+    # and the fallback must not paint a row nobody has touched.
+    exclusions = "".join(f'${status_letter}3<>"{v}",' for v in sorted(CONTACT_STATUS_VALUES))
+    ws.conditional_formatting.add(
+        row_range,
+        FormulaRule(
+            formula=[f'AND(${status_letter}3<>"",{exclusions.rstrip(",")})'],
+            fill=PatternFill("solid", bgColor="FFC7CE"),
+            stopIfTrue=False,
+        ),
+    )
     applied.append(
         "Contact Search Status: whole row A..{last} by status -- "
         "Job not suitable=grey, Potential contact=yellow, Contact found=blue, "
-        "Job found=green, Not started=no fill  [{rng}]".format(
+        "Job found=green, Not started=no fill, anything else=red  [{rng}]".format(
             last=get_column_letter(len(columns)), rng=row_range
         )
     )
