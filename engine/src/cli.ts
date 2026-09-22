@@ -146,6 +146,9 @@ async function main(): Promise<number> {
     linkedinLocations: cfg.locations,
     // Only ever set by tests and by an operator pointing at a local fixture.
     linkedinBaseUrl: args['linkedin-base'],
+    // Employer boards from the run config. Absent means the run stays on
+    // LinkedIn alone, which is what every run before 2026-09-22 did.
+    atsBoards: cfg.atsBoards,
   });
   const result = await runPipeline(adapters, cfg, { historyDup: historySplit(args.history) });
 

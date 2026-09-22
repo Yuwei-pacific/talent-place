@@ -28,6 +28,7 @@ import type { Card, SourceAdapter } from '../types.js';
 import type { Guard, SourceHealth, StopKind } from '../ratelimit.js';
 import { RateLimiter, mapPool, newSourceHealth, newStopToken, stopSource } from '../ratelimit.js';
 import { linkedinGuestAdapter } from './linkedin-guest.js';
+import { atsAdapter, type AtsBoard } from './ats.js';
 
 /**
  * Per-source request rates, in requests/second.
@@ -145,8 +146,15 @@ export async function runDiscovery(
 }
 
 /**
- * The live source set: LinkedIn's public guest API, plus ATS boards when the
- * caller has tokens for them.
+ * The live source set: LinkedIn's public guest API, plus employer ATS boards when
+ * the run config lists them.
+ *
+ * ATS boards are the employer's OWN postings, which A1 prefers over any portal,
+ * and the APIs need no auth or token. Until 2026-09-22 this docstring promised a
+ * branch the signature could not reach — it read "when the caller has tokens"
+ * while accepting no boards — so `atsAdapter` had no caller, `DEFAULT_RATES.ats`
+ * budgeted a rate for a source that never ran, and CLAUDE.md listed the adapter
+ * as live. All three described the intention; only this function decides.
  *
  * CercoLavoro is deliberately absent. On the 2026-09-17 run it produced 10
  * candidates from ~160 requests and NONE survived triage (9 `fuori profilo`,
@@ -159,6 +167,13 @@ export function defaultAdapters(opts: {
   linkedinLocations: string[];
   /** Test/ops seam: point the adapter at a local server instead of linkedin.com. */
   linkedinBaseUrl?: string;
+  /** Employer boards to poll. Absent or empty means no `ats` source at all,
+   *  rather than a source that runs and finds nothing. */
+  atsBoards?: AtsBoard[];
 }): SourceAdapter[] {
-  return [linkedinGuestAdapter(opts.linkedinLocations, { baseUrl: opts.linkedinBaseUrl })];
+  const adapters: SourceAdapter[] = [
+    linkedinGuestAdapter(opts.linkedinLocations, { baseUrl: opts.linkedinBaseUrl }),
+  ];
+  if (opts.atsBoards?.length) adapters.push(atsAdapter(opts.atsBoards));
+  return adapters;
 }

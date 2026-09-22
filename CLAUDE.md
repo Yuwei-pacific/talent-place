@@ -170,7 +170,19 @@ These are A1/A4 rules expressed as code. Changing one means changing a rule, so 
 
 `Card` (a discovery hit) → `geoFilter` → `dedupCards` → `prefilter` → detail fetch/verify → `Role`. Dedup runs **before** prefilter so that duplicates from the (query × location) fan-out don't consume `topK` slots or detail budget.
 
-Discovery adapters live in `src/discovery/`, each returning `Card[]` behind the `SourceAdapter` interface: LinkedIn public guest API, employer ATS JSON APIs (Greenhouse/Lever/Ashby/Workable), Ashby job boards, CercoLavoro public SERP, and a generic employer-page check. Indeed direct HTTP is 403 from datacenter clients, so Indeed stays a runtime-declared source (public web + employer verification) unless a connector is provided.
+`src/discovery/` holds three `SourceAdapter`s and two plain helpers, and the distinction matters — `defaultAdapters` is what decides which of them a run actually reaches:
+
+| Export | Kind | Reachable? |
+|---|---|---|
+| `linkedinGuestAdapter` | `SourceAdapter` | **yes**, by default |
+| `atsAdapter(boards)` | `SourceAdapter` | **yes**, when the run config lists `atsBoards`; kinds `greenhouse` and `lever` only, and an unlisted kind is refused at construction |
+| `cercoLavoroAdapter` | `SourceAdapter` | **no**, deliberately — see the `run.ts` docstring for the measured reason |
+| `employer.ts::ashbyBoard` | plain function | used by the employer probe, not an adapter |
+| `employer.ts::checkEmployerPage` | plain function | used by `verify` |
+
+Until 2026-09-22 this paragraph listed six adapters as live while `defaultAdapters` returned one: `atsAdapter` had no caller, its docstring promised a "tokens" argument its signature could not accept, and `DEFAULT_RATES.ats` budgeted a rate for a source that never ran. Read that table, not the intention.
+
+Indeed direct HTTP is 403 from datacenter clients, so Indeed stays a runtime-declared source (public web + employer verification) unless a connector is provided.
 
 ## Gotchas
 
