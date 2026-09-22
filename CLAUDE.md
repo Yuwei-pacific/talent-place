@@ -22,7 +22,7 @@ Search output used to be pasted into SharePoint by hand. It no longer is. Owners
 | `Review.xlsx` | **colleagues** | reads freely; **appends new company rows only**, behind guards. Never regenerated. |
 | `Roles.xlsx` | **machine** | regenerated wholesale every run: sheet `Roles` (one row per role) + `Company Summary` (one row per company, with the human columns copied in read-only) |
 | `_machine/*.csv` | machine | plain-text diffable copies, no openpyxl |
-| `_machine/backups/` | machine | pre-write copies of `Review.xlsx` and the canonical CSV |
+| `_machine/backups/` | machine | pre-write copies of `Review.xlsx` |
 | `Review-additions-<run>.csv` | machine | written **instead of** touching `Review.xlsx` when a guard refuses |
 
 `Roles.xlsx` is **not** a review queue anyone merges — it is a rendering. That distinction matters: a machine file a human must merge back is just the paste step relocated.
@@ -36,7 +36,7 @@ doctor         verify the target dir (sync mount? dataless? Excel lock?)
 export-history Review.xlsx -> the CSV a run dedups against   (read-only)
 stage          TSV -> Roles.xlsx + _machine/*.csv   (never touches Review.xlsx)
 append         add genuinely-new companies to Review.xlsx
-harvest        report what colleagues decided        (read-only audit)
+harvest        what colleagues decided since the previous export   (read-only audit)
 ```
 
 `init-review` (create `Review.xlsx`), `color` (install the status rules) and `migrate-review` (rebuild a workbook onto a changed `REVIEW_COLUMNS`) are one-time or as-needed. `export-history` is read-only and runs before every search.

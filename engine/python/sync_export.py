@@ -1839,11 +1839,19 @@ def cmd_append(args: argparse.Namespace) -> int:
 # there. The mapping is explicit rather than assumed.
 
 
-# Columns `harvest` compares between Review.xlsx and the canonical: the
-# human-owned set, plus `Reviewer Notes`, which has no other home. These were
-# called PULL_* until `pull` was removed on 2026-09-18 -- the name said pull, but
-# `harvest` is what reads them, which is how a rename can look safe and not be.
-HARVEST_COLUMNS = [c for c in HUMAN_COLS if c != "Reviewer Notes"] + ["Reviewer Notes"]
+# Columns `harvest` compares between Review.xlsx and the export it is pointed at:
+# the human-owned set. These were called PULL_* until `pull` was removed on
+# 2026-09-18 -- the name said pull, but `harvest` is what reads them, which is
+# how a rename can look safe and not be.
+HARVEST_COLUMNS = list(HUMAN_COLS)
+
+# Columns a comparison against an EXPORT must not count. A4 has the single `Notes`
+# column that Review splits into a machine half and `Reviewer Notes`, and the
+# export carries only the machine half -- so on the exported side this column
+# always reads empty, and every row carrying a note reports as a change on every
+# run, forever. Declared in the output rather than dropped, because a report that
+# cannot see a column should say so instead of quietly ignoring it.
+NOT_COMPARED = ["Reviewer Notes"]
 
 # Review splits A4's single `Notes` into machine and human halves; map back when
 # comparing the two files.
@@ -1851,12 +1859,19 @@ REVIEW_TO_A4_COLUMN = {"Matching Notes": "Notes"}
 
 
 def _harvest_review(d: Path, canon) -> dict:
-    """Read Review.xlsx and match its rows to canonical history.
+    """Read Review.xlsx and report what changed since `canon`.
 
-    Read-only: this is the audit path, not a sync. Returns matched
-    updates, rows with no canonical counterpart, and conflicts -- where the
-    colleague's value differs from a NON-EMPTY canonical value, which is
-    reported rather than silently resolved.
+    Read-only: this is the audit path, not a sync.
+
+    A DELTA, not a reconciliation. `canon` is expected to be an `export-history`
+    output -- the same record as it stood at the previous run -- so a difference
+    between the two IS the change being asked for. The older framing called that
+    a "conflict", which only made sense while a second, separately maintained
+    record existed to disagree with; calling it one now would label every
+    colleague decision as a discrepancy.
+
+    A company whose identity cannot be settled is neither: nothing about it can
+    be compared, so it is reported apart from the changes rather than inside them.
     """
     from openpyxl import load_workbook
 
@@ -1865,9 +1880,9 @@ def _harvest_review(d: Path, canon) -> dict:
     ws = wb["Review"] if "Review" in wb.sheetnames else wb.active
     header = [c.value for c in next(ws.iter_rows(min_row=2, max_row=2))]
 
-    updates: list[dict] = []
+    changes: list[dict] = []
     new_rows: list[dict] = []
-    conflicts: list[dict] = []
+    unresolved: list[dict] = []
 
     for row in ws.iter_rows(min_row=3, values_only=True):
         if not row or not row[0]:
@@ -1879,6 +1894,8 @@ def _harvest_review(d: Path, canon) -> dict:
 
         if m.kind == "matched":
             for col in HARVEST_COLUMNS:
+                if col in NOT_COMPARED:
+                    continue
                 raw_incoming = values.get(col)
                 if raw_incoming in (None, ""):
                     continue
@@ -1896,30 +1913,41 @@ def _harvest_review(d: Path, canon) -> dict:
                 canonical_col = REVIEW_TO_A4_COLUMN.get(col, col)
                 current = m.row.get(canonical_col).strip()
                 # Compare as VALUES, not strings: a date written to the workbook
-                # comes back as '2026-09-03 00:00:00' against the CSV's
-                # '03/09/2026', and a string compare flags every row.
+                # comes back as a real date against the CSV's text, and a string
+                # compare flags every row.
                 if same_value(col, current, incoming):
-                    continue  # already in agreement -- nothing to write, nothing to report
-                if current:
-                    conflicts.append(
-                        {"company": m.row.company, "column": col, "canonical": current[:90], "review": incoming[:90]}
-                    )
-                updates.append(
-                    {"row_index": m.row.index, "company": m.row.company, "column": col, "value": incoming,
-                     "existing": current}
+                    continue  # already in agreement -- nothing changed, nothing to report
+                changes.append(
+                    {"company": m.row.company, "column": col, "was": current[:90], "now": incoming[:90]}
                 )
         elif m.kind == "unmatched":
             new_rows.append({"company": name, "values": values})
         else:
-            conflicts.append(
-                {"company": name, "column": "(identity)", "canonical": m.reason, "review": f"candidates: {[c.company for c in m.candidates][:3]}"}
+            unresolved.append(
+                {
+                    "company": name,
+                    "reason": m.reason,
+                    "candidates": [c.company for c in m.candidates][:3],
+                }
             )
     wb.close()
-    return {"updates": updates, "new_rows": new_rows, "conflicts": conflicts}
+    return {
+        "changes": changes,
+        "new_rows": new_rows,
+        "unresolved": unresolved,
+        "aliases": alias_table.report(),
+    }
 
 
 def cmd_harvest(args: argparse.Namespace) -> int:
-    """Report what colleagues decided. Never writes. This is the audit command."""
+    """Report what colleagues decided since the export at `--history`. Never writes.
+
+    Point `--history` at the previous run's `export-history` output. The two files
+    are then one record at two moments, and every difference is a decision somebody
+    made -- which is what this command exists to surface. `export-history` is
+    read-only, so the previous run's CSV can be kept beside the run that produced
+    it without either command writing to the other's file.
+    """
     d = Path(args.dir)
     if not (d / "Review.xlsx").exists():
         print(json.dumps({"ok": False, "error": f"{d / 'Review.xlsx'} does not exist"}, ensure_ascii=False))
@@ -1928,17 +1956,25 @@ def cmd_harvest(args: argparse.Namespace) -> int:
     h = _harvest_review(d, canon)
     out = {
         "review": str(d / "Review.xlsx"),
-        "canonical": str(args.history),
-        "updates": len(h["updates"]),
-        "companies_updated": len({u["row_index"] for u in h["updates"]}),
+        "compared_against": str(args.history),
+        "changes": len(h["changes"]),
+        "changed_companies": len({c["company"] for c in h["changes"]}),
         "new_companies": len(h["new_rows"]),
-        "conflicts": len(h["conflicts"]),
+        "unresolved": len(h["unresolved"]),
+        # Columns the export cannot carry, so this comparison cannot see them.
+        "not_compared": NOT_COMPARED,
+        "aliases": h["aliases"],
     }
-    if args.verbose:
-        out["update_detail"] = h["updates"]
-        out["new_detail"] = [r["company"] for r in h["new_rows"]]
-    if h["conflicts"]:
-        out["conflict_detail"] = h["conflicts"][:40]
+    # The detail IS the report: "3 changes" does not say what a colleague did, and
+    # that is the question this command exists to answer. Capped by default so a
+    # long delta stays readable, uncapped with --verbose.
+    def capped(items: list) -> list:
+        return items if args.verbose else items[:40]
+
+    out["change_detail"] = capped(h["changes"])
+    out["new_detail"] = capped([r["company"] for r in h["new_rows"]])
+    if h["unresolved"]:
+        out["unresolved_detail"] = capped(h["unresolved"])
     print(json.dumps(out, indent=2, ensure_ascii=False))
     return 0
 

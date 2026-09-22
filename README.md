@@ -146,12 +146,19 @@ Ogni cella viene trasferita **per nome di colonna**, quindi una colonna spostata
    decisioni dei colleghi restano dove le scrivono. `export-history` del punto 1 le
    rilegge al giro successivo.
 
-   Per un controllo di sola lettura su dove Review e il canonical di allora
-   divergevano (utile durante la transizione):
+   Per sapere **cosa hanno deciso i colleghi** dall'ultimo giro — di sola lettura,
+   confrontando `Review.xlsx` con l'export che quel giro aveva prodotto:
    ```
    python3 engine/python/sync_export.py harvest --dir "<percorso>" \
        --history <cartella del giro>/history.csv
    ```
+
+   Ogni differenza è una decisione di qualcuno, riportata come `was` → `now`. Due
+   file sono lo stesso registro in due momenti: non c'è niente da riconciliare, e
+   una differenza non è un conflitto. `Reviewer Notes` è l'unica colonna che il
+   confronto non può vedere — non è una colonna di A4, quindi l'export non la
+   porta — e il report la nomina in `not_compared` invece di contarla come una
+   modifica a ogni giro.
 
 **Due file, due proprietari.** `Review.xlsx` è dei colleghi: la macchina ci aggiunge solo righe nuove in fondo, dietro guardie, e non lo rigenera mai. `Roles.xlsx` è della macchina: si rigenera ogni giro e contiene una riga per ruolo. Nessuno deve unire niente a mano.
 

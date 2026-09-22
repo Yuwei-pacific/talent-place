@@ -1700,8 +1700,19 @@ class TestHarvest(TmpDirCase):
         canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa", contacted="03/09/2026")])
         self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"First Contact Date": datetime(2026, 9, 3)})])
         out = json.loads(self.run_("harvest", canon).stdout)
-        self.assertEqual(out["conflicts"], 0, "the same date must not read as a conflict")
-        self.assertEqual(out["updates"], 0, "nothing changed, so nothing to write")
+        self.assertEqual(out["changes"], 0, "the same date is not a change")
+        self.assertEqual(out["change_detail"], [], "nothing to report, so no detail")
+
+    def test_a_datetime_string_in_the_history_is_not_a_conflict(self):
+        """`test_same_date_in_two_representations_is_not_a_conflict` hands harvest a
+        canonical in the format `same_value` documents. The real producer wrote a
+        different one: `export-history` stringified the cell's datetime, so every
+        date column came back as '2026-09-03 00:00:00' -- 76 of 77 conflicts on a
+        workbook compared against its own export."""
+        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa", contacted="2026-09-03 00:00:00")])
+        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"First Contact Date": datetime(2026, 9, 3)})])
+        out = json.loads(self.run_("harvest", canon).stdout)
+        self.assertEqual(out["changes"], 0, "the ISO datetime form is the same day")
 
     def test_harvest_never_writes(self):
         canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
@@ -1709,6 +1720,37 @@ class TestHarvest(TmpDirCase):
         self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Contact Search Status": "Contact found"})])
         self.run_("harvest", canon)
         self.assertEqual(canon.read_bytes(), before, "harvest is the audit path: read-only")
+
+    def test_a_column_the_export_cannot_carry_is_named_not_counted(self):
+        """`Reviewer Notes` is human-owned in Review.xlsx, but A4 has only the single
+        `Notes` column and the export maps it to the machine half. So the exported
+        side of that comparison always reads empty and every row carrying a note
+        reports as a change, on every run, forever. The report names the blind
+        column instead of counting it."""
+        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
+        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Reviewer Notes": "Non accetta più candidature"})])
+        out = json.loads(self.run_("harvest", canon).stdout)
+        self.assertEqual(out["changes"], 0, "a column the export cannot carry is not a change")
+        self.assertEqual(out["not_compared"], ["Reviewer Notes"])
+
+    def test_it_reports_a_colleague_decision_as_was_and_now(self):
+        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa", status="Not started")])
+        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Contact Search Status": "Contact found"})])
+        out = json.loads(self.run_("harvest", canon, "--verbose").stdout)
+        self.assertEqual(out["changes"], 1)
+        self.assertEqual(out["changed_companies"], 1)
+        change = out["change_detail"][0]
+        self.assertEqual(change["company"], "Alpha Srl")
+        self.assertEqual(change["column"], "Contact Search Status")
+        self.assertEqual(change["was"], "Not started")
+        self.assertEqual(change["now"], "Contact found")
+
+    def test_the_output_says_what_it_compared_against(self):
+        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
+        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {})])
+        out = json.loads(self.run_("harvest", canon).stdout)
+        self.assertEqual(out["compared_against"], str(canon))
+        self.assertEqual(out["review"], str(self.tmp / "Review.xlsx"))
 
     def test_shared_company_id_is_ambiguous_not_silently_first_wins(self):
         """The 5 duplicate names share a proposed id. Collapsing them to one row
@@ -1719,9 +1761,10 @@ class TestHarvest(TmpDirCase):
         )
         self.build_review([("KPMG", "polids-7187734f", {"Contact Search Status": "Contact found"})])
         out = json.loads(self.run_("harvest", canon).stdout)
-        self.assertEqual(out["updates"], 0, "must not pick one of the two rows")
-        kinds = [c for c in out["conflict_detail"] if c["canonical"] == "duplicate_id"]
-        self.assertEqual(len(kinds), 1)
+        self.assertEqual(out["changes"], 0, "must not pick one of the two rows")
+        reasons = [u["reason"] for u in out["unresolved_detail"]]
+        self.assertEqual(reasons, ["duplicate_id"])
+        self.assertEqual([u["company"] for u in out["unresolved_detail"]], ["KPMG"])
 
 
 class TestExportHistory(TmpDirCase):
