@@ -40,6 +40,7 @@ from sync_export import (  # noqa: E402
     REVIEW_COLUMNS,
     VERIFICATION_PREFIXES,
     explode_roles,
+    evidence_report,
     validate_rows,
 )
 from reconcile import (  # noqa: E402
@@ -297,6 +298,45 @@ class TestRoleEvidence(TmpDirCase):
         # in the set of columns a live run cannot supply.
         self.assertNotIn("Alternate / Portal URLs", NOT_RECOVERABLE_FROM_FLAT_TSV)
         self.assertIn("Posted / Result Age", NOT_RECOVERABLE_FROM_FLAT_TSV)
+
+    def test_the_report_names_a_column_the_sidecar_never_reached(self):
+        """`columns_without_source` was keyed on the presence of `--evidence`, not
+        on whether a single row joined. A run that followed A1 and wrote the
+        EMPLOYER url into the TSV -- A1 prefers it over the portal url -- got a
+        total join miss and a manifest declaring nothing missing.
+
+        The sidecar is keyed by API url here and the TSV carries a different one,
+        which is exactly the employer-vs-portal shape.
+        """
+        sidecar = {"roles": {"https://x.example/job/1": {"posted": "3 days ago"}}, "checks": {}}
+        row = self._row("1. https://employer.example/1", "1. First Intern", "1")
+        roles, _ = explode_roles([row], sidecar)
+
+        report = evidence_report(roles, sidecar, "/run")
+        self.assertEqual(report["filled"]["Posted / Result Age"], "0/1")
+        self.assertIn("Posted / Result Age", report["without_source"])
+        self.assertEqual(report["sidecar_rows"], 1, "the sidecar had a row; it just did not join")
+        self.assertIn("portal URL", report["note"])
+
+    def test_a_joined_column_reports_its_count(self):
+        sidecar = {"roles": {"https://a.example/1": {"posted": "3 days ago"}}, "checks": {}}
+        row = self._row("1. https://a.example/1 | 2. https://a.example/2", "1. First Intern | 2. Second Intern", "2")
+        roles, _ = explode_roles([row], sidecar)
+
+        report = evidence_report(roles, sidecar, "/run")
+        self.assertEqual(report["filled"]["Posted / Result Age"], "1/2")
+        self.assertNotIn("Posted / Result Age", report["without_source"])
+        self.assertEqual(report["filled"]["Search Query"], "0/2")
+        self.assertIn("Search Query", report["without_source"])
+        self.assertNotIn("note", report, "a partial join is not a failure to declare")
+
+    def test_without_evidence_every_derived_column_is_without_source(self):
+        row = self._row("1. https://a.example/1", "1. First Intern", "1")
+        roles, _ = explode_roles([row], None)
+        report = evidence_report(roles, {"roles": {}, "checks": {}}, None)
+        self.assertEqual(report["sidecar_rows"], 0)
+        self.assertEqual(sorted(report["without_source"]), sorted(report["filled"]))
+        self.assertNotIn("note", report, "no sidecar was offered, so no join failed")
 
     def _write_evidence(self, text: str) -> str:
         path = Path(self.tmp) / "role-evidence.csv"

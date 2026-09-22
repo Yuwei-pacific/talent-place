@@ -197,6 +197,14 @@ NEW_COMPANY_DEFAULTS = {
 # marker carries it and _role_values now reads it out.
 NOT_RECOVERABLE_FROM_FLAT_TSV = {"Posted / Result Age", "Search Query"}
 
+# Columns the `--evidence` sidecar fills. Deliberately NOT the same set as
+# NOT_RECOVERABLE_FROM_FLAT_TSV: `Alternate / Portal URLs` IS recoverable from the
+# TSV's own `alt.` marker, so it is not "unrecoverable" -- but the sidecar fills
+# it too, so a run that supplies evidence and gets nothing has to hear about that
+# column as well. One list, so the report cannot disagree with what the sidecar
+# is read for.
+EVIDENCE_FILLED_COLUMNS = ["Alternate / Portal URLs", "Posted / Result Age", "Search Query"]
+
 
 # --------------------------------------------------------------------------
 # Per-role evidence sidecar
@@ -640,6 +648,42 @@ def explode_roles(
     return role_rows, company_rows
 
 
+def evidence_report(role_rows: list[dict[str, str]], evidence: dict, supplied: str | None) -> dict:
+    """What the evidence join actually achieved, as a property of the rows.
+
+    The three columns below are the ones a flat 22-column TSV cannot carry, so
+    they are what `--evidence` exists to fill. Whether it filled them is a
+    property of the data, not of the command line, and the difference is not
+    academic: a run that followed A1 and wrote the EMPLOYER url into the TSV --
+    A1 prefers it over the portal url -- joins on nothing, because the sidecar is
+    keyed by the url of the posting the run actually saw. That run used to
+    receive `columns_without_source: []`, a manifest declaring nothing missing
+    while all three columns sat empty.
+
+    Naming the sample URLs is what makes the failure diagnosable rather than
+    merely reported: the operator can see that the two URL families differ.
+    """
+    cols = EVIDENCE_FILLED_COLUMNS
+    total = len(role_rows)
+    sidecar_rows = len(evidence.get("roles", {}))
+    filled = {c: sum(1 for r in role_rows if (r.get(c) or "").strip()) for c in cols}
+
+    out: dict = {
+        "source": supplied,
+        "roles": total,
+        "sidecar_rows": sidecar_rows,
+        "filled": {c: f"{filled[c]}/{total}" for c in cols},
+        "without_source": sorted(c for c in cols if total and not filled[c]),
+    }
+    if supplied and total and sidecar_rows and not any(filled.values()):
+        out["note"] = (
+            "no role joined the sidecar; it is keyed by the portal URL, so a TSV "
+            "carrying the employer URL (A1's preference) cannot match it"
+        )
+        out["sample_urls"] = [(r.get("Primary Job URL") or "").strip() for r in role_rows[:5]]
+    return out
+
+
 # --------------------------------------------------------------------------
 # Writing
 # --------------------------------------------------------------------------
@@ -865,6 +909,8 @@ def cmd_stage(args: argparse.Namespace) -> int:
             + "\n  ".join(problems[:8])
         )
 
+    evidence_path = getattr(args, "evidence", None)
+    join = evidence_report(role_rows, evidence, evidence_path)
     summary = {
         "run_id": run_id,
         "tsv": args.tsv or "<stdin>",
@@ -873,8 +919,10 @@ def cmd_stage(args: argparse.Namespace) -> int:
         "roles_out": len(role_rows),
         "companies_out": len(company_rows),
         "role_columns": len(ROLE_COLUMNS),
-        "columns_without_source": [] if getattr(args, "evidence", None) else sorted(NOT_RECOVERABLE_FROM_FLAT_TSV),
-        "evidence": getattr(args, "evidence", None),
+        # Both derived from the rows, not from whether the flag was passed.
+        "columns_without_source": join["without_source"],
+        "evidence_join": join,
+        "evidence": evidence_path,
         "target": str(roles_xlsx),
         "never_touched": str(d / "Review.xlsx"),
     }

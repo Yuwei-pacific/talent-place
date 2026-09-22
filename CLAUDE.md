@@ -110,7 +110,7 @@ python3 python/sync_export.py stage --dir "<Master>" --history <run dir>/history
     --tsv <run dir>/run.tsv --evidence <run dir>/role-evidence.csv
 ```
 
-Without `--evidence` those columns stay empty and the manifest lists them under `columns_without_source`; with it, that list is empty. Freshness in particular — A1 requires `verificare l'attualità`, and before this the posted date was dropped between the card stage and the report.
+Without `--evidence` those columns stay empty and the manifest lists them under `columns_without_source`. That list, and the per-column `filled / total` counts beside it in `evidence_join`, are derived from the rows rather than from whether the flag was passed — because the join key is the URL, and a run that followed A1 and wrote the employer URL into the TSV joins on nothing while the sidecar holds the portal URL. Reporting the flag made that run's manifest declare nothing missing while all three columns sat empty. Freshness in particular — A1 requires `verificare l'attualità`, and before this the posted date was dropped between the card stage and the report.
 
 Before `src/cli.ts` existed, the adapters, `geoFilter`, `dedupCards`, `prefilter` and `observe` were all an uncalled library and the run loop lived in a throwaway script — so nothing about a run was reproducible. **If you find yourself writing a `/tmp` script to drive the adapters, that script belongs in `src/` instead.**
 
