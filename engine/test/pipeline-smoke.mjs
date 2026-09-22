@@ -135,6 +135,35 @@ const cfg = {
 }
 
 // ---------------------------------------------------------------------------
+// 3b. The false-friend list reports its own effect. A2 used to state its false
+//     positives as SENTENCES about situations, and a sentence wrapped in \b...\b
+//     matches no title or snippet — so the list could look populated while
+//     scoring nothing down, and nothing said so.
+// ---------------------------------------------------------------------------
+{
+  const stub = {
+    id: 'stub',
+    async discover() {
+      return [card({ company: 'Alpha', sourceJobId: '1', url: 'https://example.com/a', title: 'Customer Service Agent' })];
+    },
+  };
+  const sentence = 'Un CX Intern che gestisce chiamate senza analisi è un falso positivo.';
+  const r = await runPipeline(
+    [stub],
+    { ...cfg, falseFriends: ['customer service agent', sentence], topK: 5 },
+    {},
+    { rates: { stub: 1000 } },
+  );
+
+  assert.equal(r.falseFriendHits['customer service agent'], 1, 'the term-shaped entry fires');
+  assert.equal(r.falseFriendHits[sentence], 0, 'the sentence-shaped entry cannot fire, and the run says so');
+  assert.ok(
+    r.kept.some((c) => c.company === 'Alpha'),
+    'scored down is not dropped: A2 says keep the recall and pay for the noise',
+  );
+}
+
+// ---------------------------------------------------------------------------
 // 4. Nothing is silently discarded: every card that entered leaves through a
 //    named exit. This is what makes the "declare coverage" duty auditable.
 // ---------------------------------------------------------------------------

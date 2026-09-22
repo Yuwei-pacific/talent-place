@@ -176,7 +176,11 @@ async function main(): Promise<number> {
   );
   writeFileSync(
     join(outDir, 'run-report.json'),
-    JSON.stringify({ config: cfg, counters: result.counters, sources: result.report }, null, 1),
+    JSON.stringify(
+      { config: cfg, counters: result.counters, sources: result.report, falseFriendHits: result.falseFriendHits },
+      null,
+      1,
+    ),
   );
 
   process.stdout.write(summary(result, cfg.masterId, cfg.edition) + '\n');

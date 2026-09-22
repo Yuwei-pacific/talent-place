@@ -153,5 +153,6 @@ Due esempi di criterio, non offerte verificate:
 
 - Un Client Strategy Intern che analizza un mercato, costruisce un business case e formula raccomandazioni può essere pertinente senza progettare un servizio.
 - Un CX Intern che gestisce chiamate, ordini e recupero crediti senza analisi o miglioramento dell’esperienza è un falso positivo.
+  `termini:` customer service agent; call center; recupero crediti
 
 I termini di ricerca possono essere adattati e tradotti in italiano; combinarli con stage, tirocinio o internship e le condizioni geografiche applicabili. Non usarli da soli come evidenza di pertinenza.

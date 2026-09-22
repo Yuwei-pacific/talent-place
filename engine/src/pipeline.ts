@@ -52,6 +52,9 @@ export interface PipelineResult {
   dropped: TaggedCard[];
   /** Cards dropped for being outside the admitted geography. */
   droppedNonEu: Card[];
+  /** Cards matching a false friend. Reported per term so a list that cannot
+   *  fire is visible instead of merely populated — see prefilter.ts. */
+  falseFriendHits: Record<string, number>;
   /** Roles already in the canonical history or in Review.xlsx. */
   duplicates: Card[];
   report: SourceReport[];
@@ -158,6 +161,7 @@ export async function runPipeline(
     dropped,
     droppedNonEu,
     duplicates: split.duplicates,
+    falseFriendHits: scored.falseFriendHits,
     report,
     counters: {
       queriesTried: queries.length,
