@@ -48,6 +48,7 @@ from reconcile import (  # noqa: E402
     MACHINE_UNION_COLS,
     MULTI_VALUE_SPEC,
     find_duplicate_names,
+    load_aliases,
     load_canonical,
     match_company,
     norm_company,
@@ -646,6 +647,40 @@ class TestCanonical(unittest.TestCase):
         self.assertEqual(m.reason, "company id")
 
 
+class TestAliasTable(TmpDirCase):
+    """`load_aliases` is the only reader of the human-maintained alias table, and
+    rung 3 of the matching ladder cannot fire without it. A silent `{}` made "the
+    file is missing" and "no aliases are needed" the same answer."""
+
+    def test_a_missing_file_is_reported_not_silently_empty(self):
+        table = load_aliases(self.tmp / "company-aliases.csv")
+        self.assertEqual(table.mapping, {})
+        self.assertEqual(table.report()["loaded"], 0)
+        self.assertIn("not found", table.note)
+
+    def test_it_reports_what_it_loaded(self):
+        f = self.tmp / "company-aliases.csv"
+        f.write_text(
+            "alias_norm;canonical_id;note\n"
+            "bof careers;polids-6556667b;BoF Careers republished a Moncler role\n",
+            encoding="utf-8",
+        )
+        table = load_aliases(f)
+        self.assertEqual(table.mapping, {"bof careers": "polids-6556667b"})
+        self.assertEqual(table.report(), {"file": str(f), "loaded": 1})
+        self.assertEqual(table.note, "")
+
+    def test_a_header_only_file_is_reported_as_empty(self):
+        # archive/company-aliases.csv is exactly this shape: 29 bytes and a
+        # header. Restoring it verbatim would reproduce the silence it was
+        # archived for.
+        f = self.tmp / "company-aliases.csv"
+        f.write_text("alias_norm;canonical_id;note\n", encoding="utf-8")
+        table = load_aliases(f)
+        self.assertEqual(table.mapping, {})
+        self.assertIn("no aliases", table.note)
+
+
 class TestCompanyId(unittest.TestCase):
     def test_survives_legal_suffix_but_not_a_real_rename(self):
         self.assertEqual(propose_company_id("Loro Piana"), propose_company_id("Loro Piana S.p.A."))
@@ -1200,10 +1235,16 @@ class TestAppend(TmpDirCase):
     cells are touched, no style is ever written, machine-owned dates are carried
     and human-owned ones are not invented."""
 
-    def build(self, review_rows):
-        """Build a Review.xlsx with REVIEW_COLUMNS and the given data rows."""
+    def build(self, review_rows, root=None):
+        """Build a Review.xlsx with REVIEW_COLUMNS and the given data rows.
+
+        `root` defaults to the temp dir itself. Passing a subdirectory is for the
+        tests that need the publish root -- the level where `company-aliases.csv`
+        lives -- to be inside the temp dir rather than its parent.
+        """
         from openpyxl import Workbook
 
+        d = root or self.tmp
         wb = Workbook()
         ws = wb.active
         ws.title = "Review"
@@ -1213,12 +1254,13 @@ class TestAppend(TmpDirCase):
             for c, name in enumerate(REVIEW_COLUMNS, start=1):
                 if row.get(name):
                     ws.cell(3 + i, c, row[name])
-        wb.save(self.tmp / "Review.xlsx")
+        wb.save(d / "Review.xlsx")
 
-    def stage_run(self, companies):
+    def stage_run(self, companies, root=None):
         """Write a _machine/companies-<run>.csv as `stage` would, plus a manifest."""
+        d = root or self.tmp
         run = "20260916-000000"
-        machine = synced_fs.ensure_dir(self.tmp / "_machine")
+        machine = synced_fs.ensure_dir(d / "_machine")
         with (machine / f"companies-{run}.csv").open("w", encoding="utf-8", newline="") as fh:
             w = csv.writer(fh, delimiter=";")
             w.writerow(A4_COLUMNS)
@@ -1246,12 +1288,45 @@ class TestAppend(TmpDirCase):
         row.update(over)
         return row
 
-    def run_append(self, *extra):
+    def run_append(self, *extra, root=None):
         return subprocess.run(
-            [sys.executable, str(HERE / "sync_export.py"), "append", "--dir", str(self.tmp), *extra],
+            [sys.executable, str(HERE / "sync_export.py"), "append", "--dir", str(root or self.tmp), *extra],
             capture_output=True,
             text=True,
         )
+
+    def test_the_summary_reports_the_alias_table_it_matched_with(self):
+        # The table lives at the publish root, one level above the Master dir:
+        # a portal name is not a per-Master distinction.
+        master = self.tmp / "Strategic design ED.28"
+        master.mkdir()
+        self.build([{"Company / Outreach Account": "Esistente Srl", "Company ID": "polids-11111111"}], root=master)
+        self.stage_run([self.new_company("Nuova Azienda Srl")], root=master)
+
+        out = json.loads(self.run_append(root=master).stdout)
+        self.assertEqual(out["aliases"]["file"], str(self.tmp / "company-aliases.csv"))
+        self.assertEqual(out["aliases"]["loaded"], 0)
+        self.assertIn("not found", out["aliases"]["note"])
+
+    def test_a_populated_alias_table_matches_the_variant_spelling(self):
+        # The end-to-end payoff for rung 3: without the table this role is
+        # deferred as a new company, because "BoF Careers" is a portal name and
+        # normalises to nothing already in the sheet.
+        master = self.tmp / "Strategic design ED.28"
+        master.mkdir()
+        self.build([{"Company / Outreach Account": "Moncler", "Company ID": "polids-6556667b"}], root=master)
+        (self.tmp / "company-aliases.csv").write_text(
+            "alias_norm;canonical_id;note\n"
+            "bof careers;polids-6556667b;BoF Careers republished a Moncler role\n",
+            encoding="utf-8",
+        )
+        self.stage_run([self.new_company("BoF Careers")], root=master)
+
+        out = json.loads(self.run_append(root=master).stdout)
+        self.assertEqual(out["aliases"]["loaded"], 1)
+        self.assertEqual(out["already_present"], 1, "rung 3 must match the alias, not defer it")
+        self.assertEqual(out["to_append"], 0)
+        self.assertEqual(out["deferred"], 0)
 
     def test_appends_only_new_companies(self):
         self.build([{"Company / Outreach Account": "Esistente Srl", "Company ID": "polids-11111111"}])

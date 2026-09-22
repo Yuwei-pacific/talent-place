@@ -1621,7 +1621,7 @@ def cmd_append(args: argparse.Namespace) -> int:
         print(json.dumps({"ok": True, "run_id": run_id, "appended": 0, "deferred": 0, "note": "no companies in run"}, ensure_ascii=False))
         return 0
 
-    aliases = load_aliases(d.parent / "company-aliases.csv")
+    alias_table = load_aliases(d.parent / "company-aliases.csv")
     wb = load_workbook(target, rich_text=True)
     ws = wb["Review"] if "Review" in wb.sheetnames else wb.active
     existing = _review_as_canonical(ws)
@@ -1638,7 +1638,7 @@ def cmd_append(args: argparse.Namespace) -> int:
         name = (row.get("Company / Outreach Account") or "").strip()
         if not name:
             continue
-        m = match_company(name, existing, aliases=aliases)
+        m = match_company(name, existing, aliases=alias_table.mapping)
         if m.kind == "matched":
             already += 1
             continue
@@ -1665,6 +1665,10 @@ def cmd_append(args: argparse.Namespace) -> int:
         # written. Stays 0 on the dry-run and on every refusal path.
         "appended": 0,
         "deferred": len(deferred),
+        # What the matching ladder actually had to work with. A missing or
+        # header-only table means rung 3 could not fire, which is worth knowing
+        # before reading `deferred` as "genuinely new companies".
+        "aliases": alias_table.report(),
     }
     if deferred:
         summary["deferred_detail"] = deferred
@@ -1785,7 +1789,7 @@ def _harvest_review(d: Path, canon) -> dict:
     """
     from openpyxl import load_workbook
 
-    aliases = load_aliases(d.parent / "company-aliases.csv")
+    alias_table = load_aliases(d.parent / "company-aliases.csv")
     wb = load_workbook(d / "Review.xlsx", read_only=True, data_only=True)
     ws = wb["Review"] if "Review" in wb.sheetnames else wb.active
     header = [c.value for c in next(ws.iter_rows(min_row=2, max_row=2))]
@@ -1800,7 +1804,7 @@ def _harvest_review(d: Path, canon) -> dict:
         values = {header[i]: row[i] for i in range(min(len(header), len(row)))}
         name = str(values.get("Company / Outreach Account") or "").strip()
         cid = str(values.get("Company ID") or "").strip()
-        m = match_company(name, canon, aliases=aliases, company_id=cid)
+        m = match_company(name, canon, aliases=alias_table.mapping, company_id=cid)
 
         if m.kind == "matched":
             for col in HARVEST_COLUMNS:

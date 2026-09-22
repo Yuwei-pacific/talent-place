@@ -355,19 +355,47 @@ def find_duplicate_names(canon: Canonical) -> dict[str, list[CanonicalRow]]:
     return {k: v for k, v in canon.by_norm_name.items() if len(v) > 1}
 
 
-def load_aliases(path: str | Path | None) -> dict[str, str]:
-    """Human-maintained alias table: alias_norm;canonical_id;note."""
+@dataclass
+class AliasTable:
+    """The alias table, plus what it took to read it.
+
+    One reader, one read: the mapping and the note about the file come from the
+    same pass, so a report of the alias table can never disagree with the aliases
+    actually in force.
+    """
+
+    mapping: dict[str, str] = field(default_factory=dict)
+    path: str = ""
+    note: str = ""
+
+    def report(self) -> dict:
+        out: dict = {"file": self.path, "loaded": len(self.mapping)}
+        if self.note:
+            out["note"] = self.note
+        return out
+
+
+def load_aliases(path: str | Path | None) -> AliasTable:
+    """Human-maintained alias table: alias_norm;canonical_id;note.
+
+    A missing or header-only file is REPORTED, never returned as an indistinguishable
+    "no aliases needed". Rung 3 of the matching ladder is inert either way, so
+    silence here hid the human escape hatch from an ambiguous name in exactly the
+    case where someone needs to know it is not working.
+    """
     if not path:
-        return {}
+        return AliasTable(note="no alias table path configured")
     p = Path(path)
     if not p.exists():
-        return {}
+        return AliasTable(path=str(p), note="file not found: rung 3 cannot fire")
     out: dict[str, str] = {}
     rows = list(csv.reader(io.StringIO(p.read_text(encoding="utf-8-sig")), delimiter=";"))
     for r in rows[1:]:
         if len(r) >= 2 and r[0].strip() and r[1].strip():
             out[r[0].strip()] = r[1].strip()
-    return out
+    if not out:
+        return AliasTable(path=str(p), note="file holds no aliases: rung 3 cannot fire")
+    return AliasTable(mapping=out, path=str(p))
 
 
 # --------------------------------------------------------------------------
