@@ -205,10 +205,22 @@ DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%d/%m/%y")
 
 def parse_date(value: str | None) -> date | None:
     """Parse a canonical-CSV date, or None. Day-first is explicit in the format
-    list, so there is no ambiguity to resolve heuristically."""
+    list, so there is no ambiguity to resolve heuristically.
+
+    A trailing time component is discarded. `export-history` stringified a date
+    cell as `str(datetime)`, which yields '2026-09-03 00:00:00' — a form this
+    function returned None for, so every date in the exported CSV compared as a
+    change. Tolerating it here reads files already on disk; the writer is fixed
+    separately so new exports do not produce it.
+
+    DATE_FORMATS deliberately stays the list of formats a value may be WRITTEN
+    in — `detect_date_format` answers "which convention does this cell use", and
+    a datetime is not one of the conventions.
+    """
     s = (value or "").strip()
     if not s:
         return None
+    s = re.split(r"[ T]\d{1,2}:\d{2}", s, maxsplit=1)[0]
     for fmt in DATE_FORMATS:
         try:
             return datetime.strptime(s, fmt).date()

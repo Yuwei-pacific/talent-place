@@ -1544,9 +1544,32 @@ def _review_as_canonical(ws) -> object:
         if not str(cells[0] or "").strip():
             continue
         rows.append(
-            CanonicalRow(index=r, cells=["" if v is None else str(v) for v in cells], header=header)
+            CanonicalRow(index=r, cells=[_cell_text(header[i], v) for i, v in enumerate(cells)], header=header)
         )
     return Canonical(header=header, rows=rows).finalize()
+
+
+def _cell_text(column: str, value: object) -> str:
+    """One workbook cell as the text a Canonical holds.
+
+    Date columns go out as date-only ISO. `str()` of a date cell yields
+    '2026-09-03 00:00:00', which `parse_date` did not read — so `export-history`
+    wrote a CSV its own reader could not read back, and every date in it
+    compared as a change. Both consumers of this view (the `append` matching
+    ladder and the export) get the fix from one place, which is the point of
+    having one view.
+
+    `_sidecar_value` already states this convention for the guard-refusal sidecar;
+    this is the same rule applied to the whole sheet.
+    """
+    if value is None:
+        return ""
+    if column in DATE_COLUMNS:
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+    return str(value)
 
 
 def _first_free_row(ws) -> int:

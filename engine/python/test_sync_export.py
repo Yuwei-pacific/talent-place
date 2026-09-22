@@ -622,6 +622,16 @@ class TestDates(unittest.TestCase):
         self.assertEqual(parse_date("17/07/2026").isoformat(), "2026-07-17")
         self.assertEqual(parse_date("3/9/2026").isoformat(), "2026-09-03")
 
+    def test_reads_an_iso_datetime(self):
+        """The form `export-history` used to write: str() of the cell's datetime.
+
+        Tolerating it is separate from no longer writing it. Exports already on
+        disk hold this form, and a reader that cannot read yesterday's file
+        reports phantom change until somebody re-exports it.
+        """
+        self.assertEqual(parse_date("2026-09-03 00:00:00").isoformat(), "2026-09-03")
+        self.assertEqual(parse_date("2026-09-03T14:30:00").isoformat(), "2026-09-03")
+
     def test_unparseable_and_empty(self):
         for bad in ("", "   ", None, "garbage", "2026-13-45", "n/a"):
             self.assertIsNone(parse_date(bad))
@@ -1768,6 +1778,27 @@ class TestExportHistory(TmpDirCase):
         self.assertEqual(rec["Company / Outreach Account"], "Alpha Srl")
         self.assertEqual(rec["Matching Job Titles"], "1. Service Design Intern — Milan, Italy")
         self.assertEqual(rec["Company ID"], "polids-aaaaaaaa")
+
+    def test_a_date_cell_survives_the_round_trip(self):
+        """A writer and a reader disagreeing about one format is the bug class this
+        module exists to prevent, and export-history had it against its own reader:
+        the date cell came out as str(datetime), which parse_date returns None for.
+        `_sidecar_value` already states the intended format: date-only ISO."""
+        self.build_review()
+        from openpyxl import load_workbook
+
+        wb = load_workbook(self.tmp / "Review.xlsx")
+        wb["Review"].cell(3, REVIEW_COLUMNS.index("First Contact Date") + 1, datetime(2026, 9, 3))
+        wb.save(self.tmp / "Review.xlsx")
+
+        out = self.tmp / "h.csv"
+        self.assertEqual(self.export("--out", str(out)).returncode, 0)
+        rows = list(csv.reader(io.StringIO(out.read_text(encoding="utf-8")), delimiter=";"))
+        rec = dict(zip(rows[0], rows[1]))
+        self.assertEqual(rec["First Contact Date"], "2026-09-03")
+        self.assertIsNotNone(
+            parse_date(rec["First Contact Date"]), "the export must be readable by its own reader"
+        )
 
     def test_the_machine_notes_half_maps_to_a4_notes(self):
         # Review splits A4's single `Notes` into `Matching Notes` (machine) and
