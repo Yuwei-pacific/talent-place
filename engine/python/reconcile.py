@@ -363,6 +363,11 @@ def find_duplicate_names(canon: Canonical) -> dict[str, list[CanonicalRow]]:
     Deliberately no count and no names here. Both change — one pair was resolved
     while this docstring still said "5" — and a number in a docstring is one more
     thing that has to stay true. Linear tracks which ones are outstanding.
+
+    NOT on an execution path: the test suite is its only caller. Ambiguity is
+    detected where it matters, by `match_company`, which returns `ambiguous` for
+    a name that sits on two rows. This function is the description of that state
+    written as something checkable, not a step any command runs.
     """
     return {k: v for k, v in canon.by_norm_name.items() if len(v) > 1}
 
