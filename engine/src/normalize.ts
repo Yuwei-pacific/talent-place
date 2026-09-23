@@ -154,6 +154,10 @@ export interface MultiValueSpec {
 /** Per-column separator policy. Mirrors `MULTI_VALUE_SPEC` in reconcile.py. */
 export const MULTI_VALUE_SPEC: Record<string, MultiValueSpec> = {
   'Matching Job Titles': { semicolon: false, numbered: true },
+  // Same shape and indexing as the two around it: the N-th score belongs to the
+  // N-th role, which is why it is written `1. 92 | 2. 78` rather than as a bare
+  // number. Added 2026-09-23, when `Matching Notes` became a score-only column.
+  'Matching Score': { semicolon: false, numbered: true },
   // altMarker: seen once in the canonical CSV (Cefriel), where a primary
   // employer URL and its LinkedIn mirror share one line. That alternate is a
   // real dedup target, so it must split out rather than ride along inside the

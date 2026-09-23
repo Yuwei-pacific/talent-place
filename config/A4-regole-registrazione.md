@@ -20,15 +20,19 @@ Essere presenti nel Company Index non significa essere già stati contattati. `P
 
 Non sovrascrivere contatti e stati già presenti con i default. Per nuove aziende senza ricerca contatti: `Contact Search Status = Not started`; nome, ruolo ed email/LinkedIn vuoti. Inserire solo referenti supportati da fonti pubbliche affidabili; nessuna email dedotta. L’utente conferma il referente prima dell’outreach.
 
-`Contact Search Status` è una **lista chiusa di cinque valori**. La macchina scrive `Not started` su ogni riga nuova; gli altri li imposta la persona in revisione, e ciascuno descrive un momento diverso del rapporto con l’azienda:
+`Contact Search Status` è una **lista chiusa di sette valori**. La macchina scrive `New job found` su ogni riga nuova; gli altri li imposta la persona in revisione, e ciascuno descrive un momento diverso del rapporto con l’azienda:
 
-- `Not started` — la ricerca del referente non è ancora iniziata.
+- `New job found` — la macchina ha trovato un ruolo nuovo qui e nessuno l’ha ancora guardato. È il default, ed è l’unico valore senza un colore proprio: bianco è lo sfondo del foglio.
 - `Job not suitable` — il ruolo non è adatto: la riga resta come traccia, non si contatta nessuno.
+- `Not started` — la persona ha **preso in carico** la riga; la ricerca del referente non è ancora iniziata.
 - `Potential contact` — il ruolo è adatto, il referente non è ancora identificato.
 - `Contact found` — il referente è identificato e verificato.
+- `Contacted` — il referente è stato contattato.
 - `Job found` — il referente ha confermato che la posizione esiste ed è aperta.
 
-Un valore fuori da questo elenco fa **rifiutare l’intera riga** da `stage`. La lista è chiusa di proposito: è l’asse su cui `Review.xlsx` colora l’intera riga (bianco / grigio / giallo / blu / verde, nell’ordine sopra), e un valore improvvisato renderebbe il colore privo di significato. I valori storici `Contacted` e `No suitable contact` restano nel CSV canonico come traccia di ciò che è già stato fatto; non vanno usati in output nuovi, e `migrate-review` li converte quando una cartella viene aggiornata.
+`Not started` era il default della macchina fino al 2026-09-23. Adesso significa che una persona ha accettato la riga, e per questo ha un colore: prima si confondeva con lo sfondo, quindi «nessuno l’ha guardata» e «l’ho presa in carico» erano indistinguibili. Le righe esistenti scritte dalla macchina si spostano su `New job found` con `migrate-review --reinterpret`, che è un gesto esplicito: un valore ancora in vocabolario non passa da `LEGACY_CONTACT_STATUS`.
+
+Un valore fuori da questo elenco fa **rifiutare l’intera riga** da `stage`. La lista è chiusa di proposito: è l’asse su cui `Review.xlsx` colora l’intera riga (bianco / grigio / lilla / giallo / blu / blu scuro / verde, nell’ordine sopra), e un valore improvvisato renderebbe il colore privo di significato. Un valore **senza colore proprio diventa bianco**, cioè indistinguibile dal default: ogni valore aggiunto deve avere il suo, ed è per questo che la lista è chiusa. Il valore storico `No suitable contact` resta nel CSV canonico come traccia di ciò che è già stato fatto, non va usato in output nuovi, e `migrate-review` lo converte quando una cartella viene aggiornata; `Contacted` era storico e dal 2026-09-23 non lo è più.
 
 Le proposte entrano nel bacino da valutare, con `Outreach Decision = Review`, anche se il matching è alto. Nessuna scrittura nel CSV di riferimento. Excel viene aggiornato solo sui record confermati, conservando storico e decisioni. L’AI prepara la mail dopo selezione; la persona rivede e invia. Non inviare automaticamente.
 
@@ -68,12 +72,16 @@ Il TSV è una proposta da revisionare: un blocco di codice di testo, Tab reali f
 Colonne esatte, nell’ordine del CSV canonico. Le prime 20 sono obbligatorie; le colonne 21–22 (`First Contact Date`, `Recall`) sono estensioni di produzione: l’AI non le compila per i nuovi ruoli (restano vuote), ma deve conservarle quando aggiorna una riga esistente che già le contiene:
 
 ```text
-Company / Outreach Account	Brands / Business Units	In Italy?	Locations	Master-fit Themes	Matching Job Titles	Job Links	Role Count	Curricular Evidence	Work Modes	Sources / Portals	Previously Contacted?	Contact Search Status	Contact Name	Contact Role	Contact Email / LinkedIn	Outreach Decision	Notes	Verification Status	Last Checked	First Contact Date	Recall
+Company / Outreach Account	In Italy?	Locations	Master-fit Themes	Matching Job Titles	Matching Score	Job Links	Role Count	Curricular Evidence	Work Modes	Sources / Portals	Previously Contacted?	Contact Search Status	Contact Name	Contact Role	Contact Email / LinkedIn	Outreach Decision	Notes	Verification Status	Last Checked	First Contact Date	Recall
 ```
 
 `In Italy?`: Yes per sedi dei ruoli inclusi tutte italiane, No se tutte fuori Italia, Mixed se entrambe. È una convenzione del report sui ruoli elencati, non un’affermazione su tutte le sedi aziendali. Se la sede non consente la classificazione, tenere il candidato fra i non risolti senza inventare un valore. `Role Count`: numero dei ruoli unici nella riga. `Last Checked`: YYYY-MM-DD.
 
-Notes: prefisso NEW/UPDATE (oppure HISTORY TO VERIFY se manca lo storico); per ogni nuovo ruolo l’etichetta A1 (`pertinente` / `adiacente`), un `Match score: 0-100` e una motivazione breve citando le responsabilità. Formato per ruolo: `[etichetta] Match score: NN/100; motivazione`. Lo score serve solo a ordinare, non sostituisce l’etichetta e non si inventa senza descrizione letta. Se l’area di A2 è ancora da confermare, aggiungere `ipotesi operativa`. Ordinare le aziende: prima chi ha almeno un ruolo `pertinente`, poi `adiacente`; a parità, score più alto, poi più ruoli nuovi. L’etichetta misura la pertinenza, non lo stato delle verifiche.
+`Matching Score`: lo score 0-100 di ogni ruolo, con lo **stesso indice** di `Matching Job Titles`, `Job Links` e `Locations` — `1. 92 | 2. 78 | 3. 62`. Lo score serve solo a ordinare, non sostituisce l’etichetta e **non si inventa**: un ruolo senza descrizione letta lascia la sua posizione vuota, non uno zero. Se un ruolo non ha score, non scriverne uno.
+
+Notes: prefisso NEW/UPDATE (oppure HISTORY TO VERIFY se manca lo storico); per ogni nuovo ruolo l’etichetta A1 (`pertinente` / `adiacente`) e una motivazione breve citando le responsabilità. Formato per ruolo: `[etichetta] motivazione`. Lo score **non** sta qui: vive in `Matching Score`. Se l’area di A2 è ancora da confermare, aggiungere `ipotesi operativa`. Ordinare le aziende: prima chi ha almeno un ruolo `pertinente`, poi `adiacente`; a parità, score più alto, poi più ruoli nuovi. L’etichetta misura la pertinenza, non lo stato delle verifiche.
+
+`Notes` in `Review.xlsx` è l’unica colonna che la macchina **semina** e la persona poi **possiede**: la macchina la scrive solo quando crea la riga, e da quel momento non la tocca più. Serve un solo posto dove annotare, non due.
 
 Se manca una descrizione affidabile, non assegnare etichetta né punteggio: conservare il candidato nei non risolti, fuori dal TSV di opportunità valutate. `Verification Status` usa uno dei valori ammessi, seguito se serve da `;` e un dettaglio libero (max una frase):
 

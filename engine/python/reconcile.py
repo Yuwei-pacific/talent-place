@@ -33,6 +33,10 @@ from pathlib import Path
 
 MULTI_VALUE_SPEC: dict[str, dict[str, bool]] = {
     "Matching Job Titles": {"semicolon": False, "numbered": True},
+    # Same shape and indexing as the two around it: the N-th score belongs to the
+    # N-th role. That shared index is the whole reason it is written
+    # `1. 92 | 2. 78` rather than as a bare number.
+    "Matching Score": {"semicolon": False, "numbered": True},
     # alt_marker: seen once in the canonical CSV (Cefriel), where a primary
     # employer URL and its LinkedIn mirror share one line. That alternate is a
     # real dedup target, so it splits out rather than riding inside the primary.
@@ -45,7 +49,11 @@ MULTI_VALUE_SPEC: dict[str, dict[str, bool]] = {
 }
 
 # Columns that are free text and must never be split.
-FREE_TEXT_COLS = {"Notes", "Curricular Evidence", "Reviewer Notes", "Matching Notes"}
+#
+# `Matching Score` is deliberately NOT here: it is a numbered list, so it carries
+# a MULTI_VALUE_SPEC entry like its siblings. The two sets are mutually exclusive
+# by construction -- `split_column` raises for a FREE_TEXT_COLS member.
+FREE_TEXT_COLS = {"Notes", "Curricular Evidence"}
 
 _NUMBERED_SPLIT = re.compile(r"(?:^|\n|\|)\s*(\d+)\.\s+")
 _ALT_SPLIT = re.compile(r"(?:^|\s)alt\.\s+", re.IGNORECASE)
@@ -159,7 +167,12 @@ HUMAN_COLS = [
     "Contact Role",
     "Contact Email / LinkedIn",
     "Outreach Decision",
-    "Reviewer Notes",
+    # `Notes` is the one column that is BOTH. A colleague owns its content once
+    # the row exists -- that is why it is declared human -- but the machine SEEDS
+    # it when it creates the row, from the run's own `Notes`, and never writes it
+    # again. The rule lives in `sync_export._new_company_values`; declaring the
+    # column human is what keeps every other writer away from it.
+    "Notes",
     "First Contact Date",
     "Recall",
 ]
@@ -177,9 +190,13 @@ MACHINE_UNION_COLS = [
 # Machine-owned, latest value wins.
 MACHINE_LATEST_COLS = ["Verification Status", "Last Checked"]
 
-# Machine-authored prose. Split out of the legacy single `Notes` column so
-# machine text and colleague notes can never fuse irreversibly.
-MACHINE_TEXT_COLS = ["Matching Notes"]
+# Machine-derived values a colleague does not type. `Matching Score` is a
+# positional list rather than prose, but it shares this set's character: the
+# machine derives it from a read and nobody edits it by hand.
+#
+# It replaced `Matching Notes` on 2026-09-23, when the machine half of the notes
+# split became a score-only column and the prose went into `Notes`.
+MACHINE_TEXT_COLS = ["Matching Score"]
 
 # Columns holding dates. Written as real datetime values, never as text: a
 # conditional-formatting formula like `$W2<=TODAY()` compares STRINGS against
