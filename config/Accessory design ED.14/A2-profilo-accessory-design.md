@@ -148,5 +148,6 @@ Due esempi di criterio, non offerte verificate:
 
 - Un Handbag Design Intern che disegna borse, prepara schede tecniche e segue prototipi con l’ufficio prodotto può essere pertinente.
 - Un Sales Assistant in boutique che vende, gestisce cassa e riassortisce senza progettazione, analisi di gamma o comunicazione di prodotto è un falso positivo.
+  `termini:` sales assistant; addetto vendita; commesso
 
 I termini di ricerca possono essere adattati e tradotti in italiano; combinarli con stage, tirocinio o internship e le condizioni geografiche applicabili. Non usarli da soli come evidenza di pertinenza.

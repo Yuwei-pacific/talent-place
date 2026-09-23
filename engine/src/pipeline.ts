@@ -11,6 +11,7 @@
 // between requests were all invented in the moment and discarded with the file.
 import type { Card, SourceAdapter } from './types.js';
 import type { ScoredCard } from './prefilter.js';
+import type { AtsBoard } from './discovery/ats.js';
 import { geoFilter } from './geo.js';
 import { dedupCards } from './dedup-cards.js';
 import { prefilter } from './prefilter.js';
@@ -24,8 +25,13 @@ export interface PipelineConfig {
   /** Combined with every area term to bias the fan-out toward student roles. */
   internshipTerms: string[];
   locations: string[];
-  /** A2's stated false positives. Scored down, never silently dropped. */
+  /** A2's stated false positives, copied verbatim from that profile's `termini:`
+   *  lines (A1, Valutazione). Scored down, never silently dropped. */
   falseFriends: string[];
+  /** Employer ATS boards to poll under `source: 'employer'`. Absent means no
+   *  `ats` source at all. A board carries its employer's DISPLAY name, because
+   *  its slug must never reach `Company / Outreach Account` — see ats.ts. */
+  atsBoards?: AtsBoard[];
   /** Cards kept after scoring. The rest stay in `dropped`, never discarded. */
   topK: number;
   rates?: Record<string, number>;
@@ -46,6 +52,9 @@ export interface PipelineResult {
   dropped: TaggedCard[];
   /** Cards dropped for being outside the admitted geography. */
   droppedNonEu: Card[];
+  /** Cards matching a false friend. Reported per term so a list that cannot
+   *  fire is visible instead of merely populated — see prefilter.ts. */
+  falseFriendHits: Record<string, number>;
   /** Roles already in the canonical history or in Review.xlsx. */
   duplicates: Card[];
   report: SourceReport[];
@@ -152,6 +161,7 @@ export async function runPipeline(
     dropped,
     droppedNonEu,
     duplicates: split.duplicates,
+    falseFriendHits: scored.falseFriendHits,
     report,
     counters: {
       queriesTried: queries.length,

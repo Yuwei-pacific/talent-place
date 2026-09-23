@@ -18,6 +18,7 @@ import { runPipeline, type PipelineConfig, type PipelineResult } from './pipelin
 import { defaultAdapters } from './discovery/run.js';
 import { loadHistory, checkDup } from './history.js';
 import { runVerification, parseTargets } from './verify.js';
+import { newCounters, indeedLine } from './observe.js';
 
 function parseArgs(argv: string[]): Record<string, string> {
   const out: Record<string, string> = {};
@@ -76,12 +77,47 @@ const USAGE = [
   'usage:',
   '  node lib/cli.js discover --config <run.json> --out <dir> [--history <exported history.csv>]',
   '  node lib/cli.js verify   --urls <list.txt>  --out <dir>',
+  '  node lib/cli.js indeed   --status Used|Unavailable --x N --y N --z N [--p N] [--note "<perché>"]',
   '',
   'verify reads one URL per line (optionally "label;url"), probes each on the',
   'employer side, and writes employer-checks.csv with an A4 Verification Status',
   'per URL. It answers "is this page alive / does it mention a stage / is there',
   'an apply path"; it does not judge whether a role suits a student.',
+  '',
+  'indeed prints A4\'s mandatory Indeed line and refuses when X != Y + Z + P. It',
+  'exists so the run computes that line instead of composing it by hand: the',
+  'invariant was implemented and never ran, so the arithmetic A4 requires was',
+  'never actually checked. A4 §58 defines the format, §60 the P term.',
 ].join('\n');
+
+/** A4's Indeed line. The invariant lives in `observe.ts`; this is its caller. */
+function cmdIndeed(args: Record<string, string>): number {
+  const num = (key: string): number => {
+    const raw = args[key];
+    if (raw === undefined) return 0;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 0) {
+      throw new Error(`--${key} must be a non-negative integer, got ${JSON.stringify(raw)}`);
+    }
+    return n;
+  };
+  const counters = newCounters();
+  // A4 §58: the states stay English and there are exactly two of them. Refused
+  // rather than defaulted, so a typo cannot produce a line asserting a state the
+  // run never reached.
+  const status = args.status ?? 'Unavailable';
+  if (status !== 'Used' && status !== 'Unavailable') {
+    throw new Error(`--status must be Used or Unavailable, got ${JSON.stringify(status)}`);
+  }
+  counters.indeedStatus = status;
+  counters.indeedNote = args.note ?? '';
+  counters.indeedX = num('x');
+  counters.indeedY = num('y');
+  counters.indeedZ = num('z');
+  counters.indeedP = num('p');
+  process.stdout.write(indeedLine(counters) + '\n');
+  return 0;
+}
 
 /** `verify` — the cheap employer probe, as a batch. */
 async function cmdVerify(args: Record<string, string>): Promise<number> {
@@ -127,11 +163,13 @@ async function main(): Promise<number> {
   const cmd = argv[0];
   const args = parseArgs(argv.slice(1));
 
-  if (args.help || (cmd !== 'discover' && cmd !== 'verify')) {
+  const COMMANDS = ['discover', 'verify', 'indeed'];
+  if (args.help || !cmd || !COMMANDS.includes(cmd)) {
     process.stderr.write(USAGE + '\n');
-    return cmd === 'discover' || cmd === 'verify' ? 0 : 2;
+    return cmd && COMMANDS.includes(cmd) ? 0 : 2;
   }
   if (cmd === 'verify') return cmdVerify(args);
+  if (cmd === 'indeed') return cmdIndeed(args);
 
   if (!args.config || !args.out) {
     process.stderr.write('discover needs --config and --out\n');
@@ -146,6 +184,9 @@ async function main(): Promise<number> {
     linkedinLocations: cfg.locations,
     // Only ever set by tests and by an operator pointing at a local fixture.
     linkedinBaseUrl: args['linkedin-base'],
+    // Employer boards from the run config. Absent means the run stays on
+    // LinkedIn alone, which is what every run before 2026-09-22 did.
+    atsBoards: cfg.atsBoards,
   });
   const result = await runPipeline(adapters, cfg, { historyDup: historySplit(args.history) });
 
@@ -173,7 +214,11 @@ async function main(): Promise<number> {
   );
   writeFileSync(
     join(outDir, 'run-report.json'),
-    JSON.stringify({ config: cfg, counters: result.counters, sources: result.report }, null, 1),
+    JSON.stringify(
+      { config: cfg, counters: result.counters, sources: result.report, falseFriendHits: result.falseFriendHits },
+      null,
+      1,
+    ),
   );
 
   process.stdout.write(summary(result, cfg.masterId, cfg.edition) + '\n');

@@ -20,15 +20,34 @@ export interface ScoredCard {
   reasons: string[];
 }
 
+export interface PrefilterResult {
+  kept: ScoredCard[];
+  dropped: ScoredCard[];
+  /** How many cards each false-friend term matched, keyed by the term as given.
+   *
+   * A term that matches nothing is inert: the list is populated with something
+   * that cannot fire, so the score never moves and nothing says so. A2 used to
+   * state its false positives as SENTENCES about situations, and a sentence
+   * wrapped in `\b…\b` matches no title or snippet ever — so the count is what
+   * turns "the list is doing nothing" from silent into reported.
+   *
+   * Counted per term against every card, not "which term won": the scoring below
+   * applies only the first match, so this answers "would this term fire at all".
+   */
+  falseFriendHits: Record<string, number>;
+}
+
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function prefilter(cards: Card[], config: PrefilterConfig): { kept: ScoredCard[]; dropped: ScoredCard[] } {
-  const ffRes = config.falseFriends.filter(Boolean).map((t) => new RegExp(`\\b${escapeRe(t)}\\b`, 'i'));
+export function prefilter(cards: Card[], config: PrefilterConfig): PrefilterResult {
+  const ffTerms = config.falseFriends.filter(Boolean);
+  const ffRes = ffTerms.map((t) => new RegExp(`\\b${escapeRe(t)}\\b`, 'i'));
   const termRes = config.queryTerms.filter(Boolean).map((t) => new RegExp(`\\b${escapeRe(t)}\\b`, 'i'));
-  const scored: ScoredCard[] = cards.map((card) => {
-    const hay = `${card.title}\n${card.snippet}`;
+  const hays = cards.map((card) => `${card.title}\n${card.snippet}`);
+  const scored: ScoredCard[] = cards.map((card, idx) => {
+    const hay = hays[idx];
     const reasons: string[] = [];
     let score = 0.3; // base: discovered at all
     if (INTERN.test(card.title)) {
@@ -63,5 +82,9 @@ export function prefilter(cards: Card[], config: PrefilterConfig): { kept: Score
   scored.sort((a, b) => b.score - a.score);
   const kept = scored.slice(0, config.topK);
   const dropped = scored.slice(config.topK);
-  return { kept, dropped };
+  const falseFriendHits: Record<string, number> = {};
+  ffTerms.forEach((term, i) => {
+    falseFriendHits[term] = hays.filter((h) => ffRes[i].test(h)).length;
+  });
+  return { kept, dropped, falseFriendHits };
 }

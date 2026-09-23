@@ -23,6 +23,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -49,13 +50,23 @@ from reconcile import (  # noqa: E402
 # A4 column contract
 # --------------------------------------------------------------------------
 
+# `Brands / Business Units` used to sit second here and in REVIEW_COLUMNS. It
+# was removed on 2026-09-23: the only writer was a verbatim copy of this TSV's
+# own cell (`explode_roles`), no run ever populated it, and `reconcile.py` never
+# knew it existed. It was not dead so much as frozen -- `init-review` fills it
+# once from history and nothing updates it again, so it read as "someone forgot"
+# in every column of every new row.
 A4_COLUMNS = [
     "Company / Outreach Account",
-    "Brands / Business Units",
     "In Italy?",
     "Locations",
     "Master-fit Themes",
     "Matching Job Titles",
+    # Sits with the other per-role positional columns (Locations, Matching Job
+    # Titles, Job Links) because it SHARES THEIR INDEX: the N-th score belongs to
+    # the N-th title and the N-th link. That is why it is written `1. 92 | 2. 78`
+    # and not as a bare number.
+    "Matching Score",
     "Job Links",
     "Role Count",
     "Curricular Evidence",
@@ -78,7 +89,6 @@ A4_COLUMNS = [
 # which the flat 22-column projection had destroyed.
 ROLE_COLUMNS = [
     "Company / Outreach Account",
-    "Brand / Business Unit",
     "Job Title",
     "Location",
     "In Italy?",
@@ -100,22 +110,33 @@ COMPANY_SUMMARY_COLUMNS = A4_COLUMNS + ["Company ID"]
 # --------------------------------------------------------------------------
 # The human-facing workbook.
 #
-# The A4 columns with `Notes` SPLIT into `Matching Notes` (machine) and
-# `Reviewer Notes` (human), plus `Company ID`, minus the two A4 columns this
-# sheet does not render (see the note on REVIEW_COLUMNS below).
+# The A4 columns with `Notes` accompanied by `Matching Score` (machine), plus
+# `Company ID`, minus the two A4 columns this sheet does not render (see the
+# note on REVIEW_COLUMNS below).
 #
-# The split is the point. `Notes` was the one column both sides wrote --
-# add_verified.py appended machine text to whatever a colleague had typed,
-# joined with ' | ', irreversibly. Latent today (0 of 49 non-empty Notes cells
-# contain the marker) but unrecoverable the moment it fires, so it is split
-# before the machine ever appends to this file.
+# `Notes` was SPLIT into `Matching Notes` (machine) + `Reviewer Notes` (human)
+# on 2026-09-16, because it was the one column both sides wrote and
+# `add_verified.py` fused machine text into whatever a colleague had typed,
+# joined with ' | ', irreversibly. The two halves are back in ONE column as of
+# 2026-09-23: the colleague asked for a single place to write, `add_verified.py`
+# is gone (2026-09-18), and `append` never touches an existing cell.
+#
+# What replaces the structural guard is a RULE, and it is load-bearing:
+#
+#     THE MACHINE WRITES `Notes` ONLY WHEN IT CREATES THE ROW.
+#     It never writes `Notes` on a row that already exists.
+#
+# That holds today because of the command set, not by construction -- which is
+# exactly how the original fusing got in. `_new_company_values` is the only
+# writer and a test asserts it; the cost of losing the rule is the original one,
+# and it is unrecoverable.
 #
 # Built programmatically rather than from a checked-in .xlsx template: the
 # column set, number formats and validation live in code, so they appear in a
 # diff instead of inside an opaque binary.
 # --------------------------------------------------------------------------
 
-# 22 columns. Two A4 columns are deliberately NOT rendered here:
+# 21 columns. Two A4 columns are deliberately NOT rendered here:
 #
 #   Previously Contacted?  and  Outreach Decision
 #
@@ -128,11 +149,14 @@ COMPANY_SUMMARY_COLUMNS = A4_COLUMNS + ["Company ID"]
 # "No" is what "Job not suitable" now means.
 REVIEW_COLUMNS = [
     "Company / Outreach Account",
-    "Brands / Business Units",
     "In Italy?",
     "Locations",
     "Master-fit Themes",
     "Matching Job Titles",
+    # Same position as in A4, so the two lists read alike and the machine block
+    # stays A-K -- the freeze and the banner below both depend on that block
+    # being contiguous, and neither computes it.
+    "Matching Score",  # machine
     "Job Links",
     "Role Count",
     "Curricular Evidence",
@@ -142,8 +166,7 @@ REVIEW_COLUMNS = [
     "Contact Name",
     "Contact Role",
     "Contact Email / LinkedIn",
-    "Matching Notes",  # machine
-    "Reviewer Notes",  # human
+    "Notes",  # machine-seeded on row creation, then the colleague's
     "Verification Status",
     "Last Checked",
     "First Contact Date",
@@ -153,30 +176,47 @@ REVIEW_COLUMNS = [
 
 REVIEW_BANNER = (
     "Review file — this one is YOURS. Columns A-K are filled by the machine; "
-    "edit Contact Search Status, Reviewer Notes, Contact * and the dates. "
+    "edit Contact Search Status, Notes, Contact * and the dates. "
     "The whole row is coloured by Contact Search Status. "
     "Per-role evidence is in Roles.xlsx. Do not use modern Comments here: "
     "Excel's threaded comments are lost when the machine appends new rows."
 )
 
 # Historical `Notes` in the canonical CSV is machine text (every non-empty cell
-# carries the [NEW COMPANY]/[pertinente]/Match-score form). It seeds
-# `Matching Notes`; `Reviewer Notes` starts empty.
+# carries the [NEW COMPANY]/[pertinente]/Match-score form). It seeds the
+# workbook's `Notes` -- on row creation only. The per-role scores now arrive as
+# their own A4 column rather than being read back out of this prose.
 NOTES_SOURCE_COLUMN = "Notes"
 
 # DATE_COLUMNS is defined in reconcile.py (it is column metadata, and
 # reconcile.same_value needs it). This is only the display format.
 DATE_NUMBER_FORMAT = "DD/MM/YYYY"
 
+# The colleague-facing status vocabulary, IN ORDER. This tuple is the single
+# source of truth: the membership set, the dropdown and the colour rules are all
+# derived from it. It used to be declared twice -- an unordered `set` here and an
+# ordered list in the dropdown -- so adding a status meant editing both, and only
+# one of them was the colour axis.
+#
+# The order IS the colour axis, in the sense that each value below carries its
+# own fill in `_install_color_rules`. `New job found` deliberately has none: it
+# is the machine's default, and white is the sheet's own background, so the
+# default needs no formula to maintain -- the same reasoning that used to apply
+# to `Not started`, which now DOES need a colour because it means a person has
+# accepted the row rather than that nobody has looked.
+CONTACT_STATUS_ORDER = (
+    "New job found",      # machine: a new role was found; nobody has looked yet
+    "Job not suitable",   # a person: not a fit, keep the row as a trace
+    "Not started",        # a person: accepted, contact search not begun
+    "Potential contact",  # a person: fits, referent not yet identified
+    "Contact found",      # a person: referent identified and verified
+    "Contacted",          # a person: we have made contact
+    "Job found",          # a person: the referent confirmed the role is open
+)
+
 # Dropdowns, so colleagues pick a value instead of typing one.
 VALIDATION = {
-    "Contact Search Status": [
-        "Not started",
-        "Job not suitable",
-        "Potential contact",
-        "Contact found",
-        "Job found",
-    ],
+    "Contact Search Status": list(CONTACT_STATUS_ORDER),
 }
 
 # What a NEW company row starts as, for the human-owned columns. A4: no invented
@@ -184,7 +224,11 @@ VALIDATION = {
 # stays with a person -- which is why `Outreach Decision` is a constant here and
 # not something a run supplies.
 NEW_COMPANY_DEFAULTS = {
-    "Contact Search Status": "Not started",
+    # The machine's default moved off `Not started` on 2026-09-23. It now says
+    # what it actually knows -- a new role was found here -- and leaves
+    # `Not started` to mean what only a person can mean: "I have seen this and
+    # accepted it, and the contact search has not begun."
+    "Contact Search Status": "New job found",
     "Outreach Decision": "Review",
     "Previously Contacted?": "To verify",
 }
@@ -196,6 +240,14 @@ NEW_COMPANY_DEFAULTS = {
 # Portal URLs" used to be listed here; it is not, because the TSV's own `alt.`
 # marker carries it and _role_values now reads it out.
 NOT_RECOVERABLE_FROM_FLAT_TSV = {"Posted / Result Age", "Search Query"}
+
+# Columns the `--evidence` sidecar fills. Deliberately NOT the same set as
+# NOT_RECOVERABLE_FROM_FLAT_TSV: `Alternate / Portal URLs` IS recoverable from the
+# TSV's own `alt.` marker, so it is not "unrecoverable" -- but the sidecar fills
+# it too, so a run that supplies evidence and gets nothing has to hear about that
+# column as well. One list, so the report cannot disagree with what the sidecar
+# is read for.
+EVIDENCE_FILLED_COLUMNS = ["Alternate / Portal URLs", "Posted / Result Age", "Search Query"]
 
 
 # --------------------------------------------------------------------------
@@ -364,26 +416,32 @@ VERIFICATION_PREFIXES = (
 # still validated; it is only Review.xlsx that stops rendering it.
 DECISION_VALUES = {"Review", "Yes", "No"}
 
-# The colleague-facing vocabulary, and the axis the whole row is coloured by.
-# Sentence case to match A4's own convention ("Not started", not "not started").
-# A4 still lists the old three -- this is a proposal until A4 is amended, and
-# `stage` refuses every row until the two agree, which is why they must change
-# together.
-CONTACT_STATUS_VALUES = {
-    "Not started",
-    "Job not suitable",
-    "Potential contact",
-    "Contact found",
-    "Job found",
-}
+# Membership, DERIVED from the ordered tuple rather than declared a second time.
+# The order lives in exactly one place -- see CONTACT_STATUS_ORDER above.
+#
+# A4 §31 makes this list closed on purpose: it is the axis the whole row is
+# coloured by, `stage` refuses every row whose value falls outside it, and the
+# red fallback in `_install_color_rules` builds its exclusions from this set. So
+# A4's text and CONTACT_STATUS_ORDER must move together.
+CONTACT_STATUS_VALUES = set(CONTACT_STATUS_ORDER)
 
-# Statuses that existed before the vocabulary changed. Read only by
-# `migrate-review`, so an old sheet can be carried onto the new column set
-# without a human retyping 180 rows.
+# Statuses that existed before a vocabulary change. Read only by
+# `migrate-review`, so an old sheet can be carried onto a new column set without
+# a human retyping 180 rows.
+#
+# This is NOT the place to re-interpret a value that is still live. The census
+# in `cmd_migrate_review` skips anything already in CONTACT_STATUS_VALUES
+# (`if value in CONTACT_STATUS_VALUES: continue`), so an entry for a live value
+# can never fire. `Not started` was the machine default until 2026-09-23 but is
+# still a live value; moving its existing rows to `New job found` is
+# `--reinterpret`, an explicit flag on the command line, not an entry here.
+#
+# `Contacted` was REMOVED from this map on 2026-09-23 -- it is a live value now,
+# and translating a historical `Contacted` down to `Contact found` would
+# silently demote a row a colleague had progressed. The identity entry for
+# `Not started` went with it: an identity mapping cannot fire either.
 LEGACY_CONTACT_STATUS = {
-    "Not started": "Not started",
     "No suitable contact": "Job not suitable",
-    "Contacted": "Contact found",
 }
 
 
@@ -615,7 +673,6 @@ def explode_roles(
             role_rows.append(
                 {
                     "Company / Outreach Account": company,
-                    "Brand / Business Unit": col("Brands / Business Units"),
                     "Job Title": rv["Job Title"],
                     "Location": rv["Location"],
                     "In Italy?": col("In Italy?"),
@@ -638,6 +695,42 @@ def explode_roles(
                 }
             )
     return role_rows, company_rows
+
+
+def evidence_report(role_rows: list[dict[str, str]], evidence: dict, supplied: str | None) -> dict:
+    """What the evidence join actually achieved, as a property of the rows.
+
+    The three columns below are the ones a flat 22-column TSV cannot carry, so
+    they are what `--evidence` exists to fill. Whether it filled them is a
+    property of the data, not of the command line, and the difference is not
+    academic: a run that followed A1 and wrote the EMPLOYER url into the TSV --
+    A1 prefers it over the portal url -- joins on nothing, because the sidecar is
+    keyed by the url of the posting the run actually saw. That run used to
+    receive `columns_without_source: []`, a manifest declaring nothing missing
+    while all three columns sat empty.
+
+    Naming the sample URLs is what makes the failure diagnosable rather than
+    merely reported: the operator can see that the two URL families differ.
+    """
+    cols = EVIDENCE_FILLED_COLUMNS
+    total = len(role_rows)
+    sidecar_rows = len(evidence.get("roles", {}))
+    filled = {c: sum(1 for r in role_rows if (r.get(c) or "").strip()) for c in cols}
+
+    out: dict = {
+        "source": supplied,
+        "roles": total,
+        "sidecar_rows": sidecar_rows,
+        "filled": {c: f"{filled[c]}/{total}" for c in cols},
+        "without_source": sorted(c for c in cols if total and not filled[c]),
+    }
+    if supplied and total and sidecar_rows and not any(filled.values()):
+        out["note"] = (
+            "no role joined the sidecar; it is keyed by the portal URL, so a TSV "
+            "carrying the employer URL (A1's preference) cannot match it"
+        )
+        out["sample_urls"] = [(r.get("Primary Job URL") or "").strip() for r in role_rows[:5]]
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -843,8 +936,10 @@ def cmd_stage(args: argparse.Namespace) -> int:
             hits = canon_by_name.get(norm_company(cr["Company / Outreach Account"]), [])
             cr["Company ID"] = hits[0].company_id if hits and len(hits) == 1 else ""
             for hc in HUMAN_COLS:
-                if hc in ("Reviewer Notes",):
-                    continue
+                # Every human column is seeded from history when the run supplied
+                # nothing. `Notes` used to be skipped here, when it was a column
+                # the canonical did not have at all (`Reviewer Notes`); it is an
+                # A4 column now, so the canonical carries it and the skip went.
                 if hc in cr and not cr.get(hc) and hits and len(hits) == 1:
                     cr[hc] = hits[0].get(hc)
         for cr in company_rows:
@@ -865,6 +960,8 @@ def cmd_stage(args: argparse.Namespace) -> int:
             + "\n  ".join(problems[:8])
         )
 
+    evidence_path = getattr(args, "evidence", None)
+    join = evidence_report(role_rows, evidence, evidence_path)
     summary = {
         "run_id": run_id,
         "tsv": args.tsv or "<stdin>",
@@ -873,8 +970,10 @@ def cmd_stage(args: argparse.Namespace) -> int:
         "roles_out": len(role_rows),
         "companies_out": len(company_rows),
         "role_columns": len(ROLE_COLUMNS),
-        "columns_without_source": [] if getattr(args, "evidence", None) else sorted(NOT_RECOVERABLE_FROM_FLAT_TSV),
-        "evidence": getattr(args, "evidence", None),
+        # Both derived from the rows, not from whether the flag was passed.
+        "columns_without_source": join["without_source"],
+        "evidence_join": join,
+        "evidence": evidence_path,
         "target": str(roles_xlsx),
         "never_touched": str(d / "Review.xlsx"),
     }
@@ -959,8 +1058,16 @@ def _install_color_rules(ws, columns: list[str]) -> list[str]:
     # ruleset included a three-branch OR that detected a status/date
     # contradiction, and simplifying it was an explicit ask.
     #
-    # "Not started" gets no rule on purpose -- white is the sheet's own
-    # background, so the default needs no formula to maintain.
+    # `New job found` gets no rule on purpose -- white is the sheet's own
+    # background, and it is the MACHINE's default, so the default needs no
+    # formula to maintain. That was `Not started`'s role until 2026-09-23;
+    # `Not started` now means a person has accepted the row, which is a state
+    # worth seeing, so it gained a fill instead of keeping the default's.
+    #
+    # Six of the seven values carry a fill; the seventh is the default. The
+    # order here is the colour order and CONTACT_STATUS_ORDER is the vocabulary
+    # order -- `test_every_status_except_the_default_has_a_colour` keeps them in
+    # step, because nothing in the code derives one from the other.
     status_col = ref("Contact Search Status", 3)
     status_letter = get_column_letter(columns.index("Contact Search Status") + 1)
     row_range = f"A3:{get_column_letter(len(columns))}{CF_RANGE_ROWS}"
@@ -968,8 +1075,10 @@ def _install_color_rules(ws, columns: list[str]) -> list[str]:
 
     STATUS_FILLS = [
         ("Job not suitable", "D9D9D9", "grey"),
+        ("Not started", "E4DFEC", "lilac"),
         ("Potential contact", "FFE699", "yellow"),
         ("Contact found", "DDEBF7", "blue"),
+        ("Contacted", "BDD7EE", "deeper blue"),
         ("Job found", "C6EFCE", "green"),
     ]
     for value, colour, name in STATUS_FILLS:
@@ -981,10 +1090,33 @@ def _install_color_rules(ws, columns: list[str]) -> list[str]:
                 stopIfTrue=False,
             ),
         )
+
+    # The fallback, added last so the exact-match rules above keep priority.
+    #
+    # Every rule above is exact-equality, so a value matching none of them fell
+    # through to the sheet's own white -- the same white a "New job found" row
+    # has, which is the machine's default and therefore the most common row.
+    # A status that was mistyped, pasted in (Excel's list validation does not run
+    # on paste), or written by an older tool therefore read as untouched. This
+    # makes it loud instead.
+    #
+    # The exclusion list is built from CONTACT_STATUS_VALUES rather than written
+    # out, so adding a status to the vocabulary cannot silently start reddening
+    # it. Empty is exempt on purpose: A4 uses an empty status for "not stated",
+    # and the fallback must not paint a row nobody has touched.
+    exclusions = "".join(f'${status_letter}3<>"{v}",' for v in sorted(CONTACT_STATUS_VALUES))
+    ws.conditional_formatting.add(
+        row_range,
+        FormulaRule(
+            formula=[f'AND(${status_letter}3<>"",{exclusions.rstrip(",")})'],
+            fill=PatternFill("solid", bgColor="FFC7CE"),
+            stopIfTrue=False,
+        ),
+    )
     applied.append(
         "Contact Search Status: whole row A..{last} by status -- "
         "Job not suitable=grey, Potential contact=yellow, Contact found=blue, "
-        "Job found=green, Not started=no fill  [{rng}]".format(
+        "Job found=green, Not started=no fill, anything else=red  [{rng}]".format(
             last=get_column_letter(len(columns)), rng=row_range
         )
     )
@@ -1075,10 +1207,15 @@ def _build_review_workbook(path: Path, canon) -> int:
     row = 3
     for cr in canon.rows:
         for c, name in enumerate(REVIEW_COLUMNS, start=1):
-            if name == "Matching Notes":
-                value: object = cr.get(NOTES_SOURCE_COLUMN)
-            elif name == "Reviewer Notes":
-                value = ""
+            if name == "Matching Score":
+                # A canonical history written before 2026-09-23 carries the score
+                # inline in `Notes`, so seeding a fresh workbook means splitting
+                # it out -- otherwise the score column would be born empty and
+                # the note would go on saying the same thing twice.
+                score_cell, _ = split_scores_from_notes(cr.get(NOTES_SOURCE_COLUMN))
+                value: object = score_cell
+            elif name == "Notes":
+                _, value = split_scores_from_notes(cr.get(NOTES_SOURCE_COLUMN))
             elif name in DATE_COLUMNS:
                 # Real dates, not text — see DATE_NUMBER_FORMAT's comment.
                 parsed = parse_date(cr.get(name))
@@ -1222,9 +1359,9 @@ def cmd_export_history(args: argparse.Namespace) -> int:
     for cr in canon.rows:
         out: list[str] = []
         for col in A4_COLUMNS:
-            # Review splits A4's single `Notes` into machine and human halves.
-            source = "Matching Notes" if col == "Notes" else col
-            out.append(cr.get(source))
+            # No renaming: Review.xlsx and A4 both call the column `Notes`, and
+            # `Matching Score` exists under the same name on both sides.
+            out.append(cr.get(col))
         out.append(cr.get("Company ID"))
         rows.append(out)
 
@@ -1250,26 +1387,113 @@ def cmd_export_history(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_reinterpret(rules: list[str]) -> dict[str, str]:
+    """Parse `--reinterpret OLD=NEW` pairs, refusing anything that cannot land.
+
+    The escape hatch for a value that CHANGED MEANING but kept its name.
+    `LEGACY_CONTACT_STATUS` cannot carry that case, and the reason is structural:
+    the census in `cmd_migrate_review` skips any value already in
+    `CONTACT_STATUS_VALUES`, so a live value never reaches the translation
+    branch. `Not started` moved from "the machine's default" to "a person has
+    taken this row on" on 2026-09-23, and every row written before that day means
+    the first thing.
+
+    Refused rather than guessed at, on the same principle as `unmapped_status`:
+    re-reading a colleague-editable column is a decision somebody makes on the
+    command line, not one this tool makes for them.
+    """
+    out: dict[str, str] = {}
+    for rule in rules:
+        old, sep, new = rule.partition("=")
+        old, new = old.strip(), new.strip()
+        if not sep or not old or not new:
+            raise StageError(f"--reinterpret expects OLD=NEW, got {rule!r}")
+        if new not in CONTACT_STATUS_VALUES:
+            raise StageError(
+                f"--reinterpret target {new!r} is not in the vocabulary: {', '.join(CONTACT_STATUS_ORDER)}"
+            )
+        if old not in CONTACT_STATUS_VALUES and old not in LEGACY_CONTACT_STATUS:
+            raise StageError(f"--reinterpret source {old!r} is neither a current value nor a known-legacy one")
+        if old == new:
+            raise StageError(f"--reinterpret {rule!r} maps a value to itself")
+        out[old] = new
+    return out
+
+
+def _migrated_notes(row: list, old_header: list[str]) -> tuple[str, str, bool]:
+    """(score_cell, note_cell, merged) for one row of the sheet being rebuilt.
+
+    The old sheet may carry the split pair (`Matching Notes` + `Reviewer Notes`),
+    a single `Notes` (a sheet older than that split), or neither. Three things
+    happen here, and they are why this is a function rather than three lines in
+    the loop:
+
+      * the machine half goes through `split_scores_from_notes`, so an inline
+        `Match score: NN/100` lands in the score column instead of being thrown
+        away along with the prose;
+      * the human half is APPENDED to the note and never allowed to overwrite
+        it: a colleague's sentence is the one thing in this sheet that cannot be
+        regenerated;
+      * when both halves exist the join is MARKED -- this is the fusion the
+        2026-09-16 split existed to prevent, done once, on one row, with the
+        reader still able to tell which sentence is whose.
+    """
+
+    def get(name: str):
+        return row[old_header.index(name)] if name in old_header else None
+
+    machine = get("Matching Notes") or get("Notes") or ""
+    human = get("Reviewer Notes") or ""
+    score_cell, note = split_scores_from_notes(str(machine) if machine else "")
+    merged = False
+    if str(human).strip():
+        human_text = str(human).strip()
+        if note.strip():
+            note = f"{note}\n— nota della persona ({date.today().isoformat()}): {human_text}"
+            merged = True
+        else:
+            note = human_text
+    return score_cell, note, merged
+
+
 def cmd_migrate_review(args: argparse.Namespace) -> int:
     """Rebuild Review.xlsx onto the current REVIEW_COLUMNS.
 
-    Needed because `init-review` refuses to overwrite a file that holds
-    colleague edits, and `stage`/`append` write into the sheet at POSITIONS
-    taken from REVIEW_COLUMNS. Change that list without this and every value
-    after the change lands in the wrong column.
+    Needed because `init-review` refuses to overwrite a file holding colleague
+    edits, and `append` writes by looking each column up in the sheet's OWN
+    row-2 header -- so a renamed or newly added column gets no value written
+    into it at all, while a column that has left the schema keeps its old values
+    sitting in a sheet that the readers then refuse.
 
     Every cell is carried across BY COLUMN NAME, so a column that moves, is
-    added, or is dropped does not shift anything. A column that no longer
-    exists is reported rather than silently discarded, and a status value that
-    is neither current nor in LEGACY_CONTACT_STATUS is reported and left as it
-    is -- guessing at a colleague's intent is how a decision gets lost.
+    added, or is dropped does not shift anything.
+
+    Three things are NOT a plain carry, and each is reported rather than assumed:
+
+      * a column whose CONTENT moved (`Matching Notes` -> `Matching Score` +
+        `Notes`) is *consumed*, not dropped;
+      * a dropped column is exported on request via `--export-dropped`, because
+        otherwise its values survive only inside `_machine/backups`;
+      * a status value that is neither current nor known-legacy is reported and
+        left as it is -- guessing at a colleague's intent is how a decision gets
+        lost. A value that is still current but CHANGED MEANING needs
+        `--reinterpret`: see `_parse_reinterpret`.
     """
     from openpyxl import Workbook, load_workbook
     from openpyxl.utils import get_column_letter
 
     d = Path(args.dir)
-    target = d / "Review.xlsx"
-    source = Path(args.source) if args.source else target
+    to_name = args.to or "Review.xlsx"
+    # A bare filename only. The sheet has to end up in the folder the other
+    # commands read, and a path here would let a typo put it somewhere nothing
+    # looks -- which fails the same way as naming it V2 without a cutover plan.
+    if Path(to_name).name != to_name:
+        raise StageError(f"--to takes a filename, not a path: {to_name!r}")
+    target = d / to_name
+    # `--from` and `--to` are INDEPENDENT: reading the record and writing the
+    # record are two decisions. Defaulting `--from` to the target (as this did)
+    # would make `--to Review-v2.xlsx` read a file that does not exist yet.
+    source = Path(args.source) if args.source else d / "Review.xlsx"
     if not source.exists():
         print(json.dumps({"ok": False, "error": f"{source} does not exist"}, ensure_ascii=False))
         return 2
@@ -1293,8 +1517,11 @@ def cmd_migrate_review(args: argparse.Namespace) -> int:
     ]
     data = [row for row in data if row and str(row[0] or "").strip()]
 
+    reinterpret = _parse_reinterpret(args.reinterpret or [])
+
     i_status = old_header.index("Contact Search Status") if "Contact Search Status" in old_header else None
     translated: dict[str, int] = {}
+    reinterpreted: dict[str, int] = {}
     unknown: dict[str, int] = {}
     if i_status is not None:
         for row in data:
@@ -1302,9 +1529,14 @@ def cmd_migrate_review(args: argparse.Namespace) -> int:
             if raw in (None, ""):
                 continue
             value = str(raw).strip()
-            if value in CONTACT_STATUS_VALUES:
+            # `--reinterpret` is consulted FIRST, because its sources are by
+            # definition values still in the vocabulary -- and the `elif` below
+            # skips exactly those.
+            if value in reinterpret:
+                reinterpreted[value] = reinterpreted.get(value, 0) + 1
+            elif value in CONTACT_STATUS_VALUES:
                 continue
-            if value in LEGACY_CONTACT_STATUS:
+            elif value in LEGACY_CONTACT_STATUS:
                 translated[value] = translated.get(value, 0) + 1
             else:
                 unknown[value] = unknown.get(value, 0) + 1
@@ -1326,6 +1558,36 @@ def cmd_migrate_review(args: argparse.Namespace) -> int:
         )
         return 2
 
+    # Where each departing column's CONTENT went. A dropped column NOT named here
+    # is one whose values are genuinely leaving the record -- which is the case
+    # `--export-dropped` exists to make recoverable.
+    consumed: dict[str, str] = {}
+    if "Matching Notes" in old_header:
+        consumed["Matching Notes"] = "Matching Score + Notes"
+    if "Reviewer Notes" in old_header:
+        consumed["Reviewer Notes"] = "Notes"
+
+    migrated = [_migrated_notes(row, old_header) for row in data]
+    notes_split = sum(1 for score_cell, _, _ in migrated if score_cell)
+    notes_merged = sum(1 for _, _, merged in migrated if merged)
+
+    # Before the rebuild, never after: `write_atomically` replaces the file, so a
+    # dropped column's values would be gone from disk by the time anything could
+    # read them back. Written even when the rebuild then fails -- an export that
+    # was not needed costs a file, a lost column costs a record.
+    exported: dict | None = None
+    if args.export_dropped and dropped and not args.dry_run:
+        dest = Path(args.export_dropped)
+        dest.mkdir(parents=True, exist_ok=True)
+        out_path = dest / f"Review-dropped-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv"
+        idx = [old_header.index(c) for c in dropped]
+        with out_path.open("w", encoding="utf-8", newline="") as fh:
+            w = csv.writer(fh, delimiter=";")
+            w.writerow([REVIEW_COLUMNS[0]] + dropped)
+            for row in data:
+                w.writerow([row[0]] + [row[j] for j in idx])
+        exported = {"file": str(out_path), "rows": len(data), "columns": dropped}
+
     def apply(tmp: Path) -> None:
         wb = Workbook()
         ws = wb.active
@@ -1333,39 +1595,66 @@ def cmd_migrate_review(args: argparse.Namespace) -> int:
         _write_review_header(ws)
         for i, row in enumerate(data):
             out_row = 3 + i
+            score_cell, note_cell, _ = migrated[i]
             for c, name in enumerate(REVIEW_COLUMNS, start=1):
-                if name not in old_header:
-                    continue
-                value = row[old_header.index(name)]
-                if name == "Contact Search Status" and value not in (None, ""):
-                    value = LEGACY_CONTACT_STATUS.get(str(value).strip(), value)
+                if name == "Matching Score":
+                    # An ADDED column: there is nothing in the old header to look
+                    # up. Its value comes out of the old machine notes, which is
+                    # what makes this a carry rather than a loss.
+                    value: object = score_cell
+                elif name == "Notes":
+                    value = note_cell
+                elif name == "Contact Search Status":
+                    raw = row[old_header.index(name)] if name in old_header else None
+                    if raw in (None, ""):
+                        value = raw
+                    else:
+                        seen = str(raw).strip()
+                        seen = LEGACY_CONTACT_STATUS.get(seen, seen)
+                        value = reinterpret.get(seen, seen)
+                else:
+                    if name not in old_header:
+                        continue
+                    value = row[old_header.index(name)]
                 ws.cell(out_row, c, value if value not in (None, "") else None)
                 if name in DATE_COLUMNS and isinstance(value, datetime):
                     ws.cell(out_row, c).number_format = DATE_NUMBER_FORMAT
         _apply_review_validation(ws)
         _install_color_rules(ws, REVIEW_COLUMNS)
-        ws.freeze_panes = "C3"
+        # Freeze the company column -- the sheet is keyed by it. This read "C3"
+        # (Company + Brands) until `Brands / Business Units` was deleted on
+        # 2026-09-23; nothing computed it, so it had to be corrected by hand.
+        ws.freeze_panes = "B3"
         ws.auto_filter.ref = f"A2:{get_column_letter(len(REVIEW_COLUMNS))}{max(3 + len(data) - 1, 2)}"
         wb.save(tmp)
 
+    report: dict[str, object] = {
+        "source": str(source),
+        "target": str(target),
+        "rows": len(data),
+        # A list, in BOTH branches. It was a list for --dry-run and a count for
+        # the real run, so reading one and then the other meant reading two
+        # different things under one name.
+        "columns_carried": carried,
+        "columns_added": added,
+        "columns_dropped": dropped,
+        # Which departing columns had their CONTENT moved somewhere, and where.
+        # A dropped column absent from this map is one whose values are leaving.
+        "columns_consumed": consumed,
+        "notes_split": notes_split,
+        "notes_merged": notes_merged,
+        "status_translated": translated,
+        "status_reinterpreted": reinterpreted,
+        "unmapped_status": unknown,
+    }
+
     if args.dry_run:
-        print(
-            json.dumps(
-                {
-                    "dry_run": True,
-                    "source": str(source),
-                    "target": str(target),
-                    "rows": len(data),
-                    "columns_carried": carried,
-                    "columns_added": added,
-                    "columns_dropped": dropped,
-                    "status_translated": translated,
-                    "unmapped_status": unknown,
-                },
-                indent=2,
-                ensure_ascii=False,
-            )
-        )
+        report["dry_run"] = True
+        if args.export_dropped and dropped:
+            # Reported, not written: a dry run that leaves a file behind is not a
+            # dry run. The counts are the same either way.
+            report["would_export"] = {"dir": args.export_dropped, "rows": len(data), "columns": dropped}
+        print(json.dumps(report, indent=2, ensure_ascii=False))
         return 0
 
     synced_fs.write_atomically(
@@ -1374,24 +1663,11 @@ def cmd_migrate_review(args: argparse.Namespace) -> int:
         allow_hydrate=args.allow_hydrate,
         backup_dir=d / "_machine" / "backups",
     )
-    print(
-        json.dumps(
-            {
-                "ok": True,
-                "source": str(source),
-                "target": str(target),
-                "rows": len(data),
-                "columns_carried": len(carried),
-                "columns_added": added,
-                "columns_dropped": dropped,
-                "status_translated": translated,
-                "unmapped_status": unknown,
-                "backup_dir": str(d / "_machine" / "backups"),
-            },
-            indent=2,
-            ensure_ascii=False,
-        )
-    )
+    report["ok"] = True
+    report["backup_dir"] = str(d / "_machine" / "backups")
+    if exported:
+        report["exported_dropped"] = exported
+    print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0
 
 
@@ -1474,9 +1750,32 @@ def _review_as_canonical(ws) -> object:
         if not str(cells[0] or "").strip():
             continue
         rows.append(
-            CanonicalRow(index=r, cells=["" if v is None else str(v) for v in cells], header=header)
+            CanonicalRow(index=r, cells=[_cell_text(header[i], v) for i, v in enumerate(cells)], header=header)
         )
     return Canonical(header=header, rows=rows).finalize()
+
+
+def _cell_text(column: str, value: object) -> str:
+    """One workbook cell as the text a Canonical holds.
+
+    Date columns go out as date-only ISO. `str()` of a date cell yields
+    '2026-09-03 00:00:00', which `parse_date` did not read — so `export-history`
+    wrote a CSV its own reader could not read back, and every date in it
+    compared as a change. Both consumers of this view (the `append` matching
+    ladder and the export) get the fix from one place, which is the point of
+    having one view.
+
+    `_sidecar_value` already states this convention for the guard-refusal sidecar;
+    this is the same rule applied to the whole sheet.
+    """
+    if value is None:
+        return ""
+    if column in DATE_COLUMNS:
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+    return str(value)
 
 
 def _first_free_row(ws) -> int:
@@ -1511,27 +1810,65 @@ def _cell_conflicts(cell, value: object) -> bool:
     return str(current).strip() != str(value).strip()
 
 
+_SCORE_IN_NOTES = re.compile(r"Match score:\s*(\d{1,3})\s*/\s*100\s*;?\s*")
+
+
+def split_scores_from_notes(notes: str | None) -> tuple[str, str]:
+    """(matching_score_cell, note_cell) from a note carrying scores inline.
+
+    The historical machine form is
+
+        [NEW COMPANY] 3 new role(s). 1. [pertinente] Match score: 92/100; <motivazione> 2. ...
+
+    and the score now has its own column, so it is lifted out of the prose rather
+    than left to say the same thing twice. The scores are numbered in the order
+    they appear, which is the order the note already numbers its roles -- that is
+    what makes the cell line up with `Matching Job Titles` / `Job Links`.
+
+    Only used where the text genuinely predates the split: `init-review` seeding
+    from a canonical history, and the one-off `migrate-review`. A live run
+    supplies `Notes` and `Matching Score` as separate columns and never comes
+    through here.
+    """
+    text = notes or ""
+    scores = _SCORE_IN_NOTES.findall(text)
+    score_cell = " | ".join(f"{i}. {s}" for i, s in enumerate(scores, 1))
+    # Drop the clause AND the `;` that followed it, so removing the score does not
+    # leave a dangling separator behind in the prose.
+    cleaned = _SCORE_IN_NOTES.sub("", text)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+    return score_cell, cleaned
+
+
 def _new_company_values(company: dict[str, str]) -> dict[str, object]:
     """Every value `append` writes for a genuinely-new company, keyed by REVIEW_COLUMNS.
 
     One function, because there were two writers and they disagreed. The workbook
     path built these values inline; the guard-refusal sidecar did
-    `company.get(col_name)` over a dict shaped by A4_COLUMNS instead. Three
-    columns therefore came out empty on every row of every sidecar:
-    `Matching Notes` (the companies CSV calls it `Notes`) and the two values that
-    exist only here, `Contact Search Status` and `Company ID`.
+    `company.get(col_name)` over a dict shaped by A4_COLUMNS instead. Columns
+    therefore came out empty on every row of every sidecar.
+
+    THE ONE WRITE RULE. `Notes` is machine-seeded and colleague-owned, the only
+    column that is both, and this function is the only place the machine writes
+    it -- on a row being CREATED. `append` never touches an existing cell, so the
+    rule holds; but it holds because of the current command set, not by
+    construction, and losing it fuses machine text into somebody's note
+    irreversibly. That already happened once (see the module comment above
+    REVIEW_COLUMNS). A test asserts it.
     """
     out: dict[str, object] = {}
     for col in REVIEW_COLUMNS:
-        if col == "Matching Notes":
-            out[col] = company.get(NOTES_SOURCE_COLUMN, "")
-        elif col == "Reviewer Notes":
-            out[col] = ""  # the colleague's column; the machine never writes it
-        elif col == "Company ID":
+        if col == "Company ID":
             # A NEW company has no id yet, so propose one and store it -- otherwise
             # the next run can only match it by name. Stored, never recomputed.
             # Deterministic, so the id here is the id a later `append` would propose.
             out[col] = company.get("Company ID") or propose_company_id(company["Company / Outreach Account"])
+        elif col == "Notes":
+            # Seeded from the run's own `Notes`. This is THAT one write -- see the
+            # docstring. The score does not come from here: a live run supplies
+            # `Matching Score` as its own A4 column, so it falls through to the
+            # generic branch below.
+            out[col] = company.get(NOTES_SOURCE_COLUMN, "")
         elif col in HUMAN_COLS:
             out[col] = NEW_COMPANY_DEFAULTS.get(col, "")
         else:
@@ -1599,7 +1936,7 @@ def cmd_append(args: argparse.Namespace) -> int:
         print(json.dumps({"ok": True, "run_id": run_id, "appended": 0, "deferred": 0, "note": "no companies in run"}, ensure_ascii=False))
         return 0
 
-    aliases = load_aliases(d.parent / "company-aliases.csv")
+    alias_table = load_aliases(d.parent / "company-aliases.csv")
     wb = load_workbook(target, rich_text=True)
     ws = wb["Review"] if "Review" in wb.sheetnames else wb.active
     existing = _review_as_canonical(ws)
@@ -1616,7 +1953,7 @@ def cmd_append(args: argparse.Namespace) -> int:
         name = (row.get("Company / Outreach Account") or "").strip()
         if not name:
             continue
-        m = match_company(name, existing, aliases=aliases)
+        m = match_company(name, existing, aliases=alias_table.mapping)
         if m.kind == "matched":
             already += 1
             continue
@@ -1643,6 +1980,10 @@ def cmd_append(args: argparse.Namespace) -> int:
         # written. Stays 0 on the dry-run and on every refusal path.
         "appended": 0,
         "deferred": len(deferred),
+        # What the matching ladder actually had to work with. A missing or
+        # header-only table means rung 3 could not fire, which is worth knowing
+        # before reading `deferred` as "genuinely new companies".
+        "aliases": alias_table.report(),
     }
     if deferred:
         summary["deferred_detail"] = deferred
@@ -1735,42 +2076,56 @@ def cmd_append(args: argparse.Namespace) -> int:
 
 # Review.xlsx column -> canonical CSV column, where the two names differ.
 #
-# The canonical CSV still calls the machine prose column `Notes`; Review.xlsx
-# calls it `Matching Notes` because it sits beside `Reviewer Notes` there. The
-# The exported history calls that column `Notes` because it is A4-shaped;
-# Review.xlsx calls it `Matching Notes` because it sits beside `Reviewer Notes`
-# there. The mapping is explicit rather than assumed.
+# EMPTY as of 2026-09-23, and kept as the seam rather than deleted. It held
+# `{"Matching Notes": "Notes"}` because Review split A4's single `Notes` into a
+# machine half and a human half; merging the halves removed the reason. A test
+# asserts it is empty, so a future rename has to declare itself here rather than
+# be assumed away.
+REVIEW_TO_A4_COLUMN: dict[str, str] = {}
 
 
-# Columns `harvest` compares between Review.xlsx and the canonical: the
-# human-owned set, plus `Reviewer Notes`, which has no other home. These were
-# called PULL_* until `pull` was removed on 2026-09-18 -- the name said pull, but
-# `harvest` is what reads them, which is how a rename can look safe and not be.
-HARVEST_COLUMNS = [c for c in HUMAN_COLS if c != "Reviewer Notes"] + ["Reviewer Notes"]
+# Columns `harvest` compares between Review.xlsx and the export it is pointed at:
+# the human-owned set. These were called PULL_* until `pull` was removed on
+# 2026-09-18 -- the name said pull, but `harvest` is what reads them, which is
+# how a rename can look safe and not be.
+HARVEST_COLUMNS = list(HUMAN_COLS)
 
-# Review splits A4's single `Notes` into machine and human halves; map back when
-# comparing the two files.
-REVIEW_TO_A4_COLUMN = {"Matching Notes": "Notes"}
+# Columns a comparison against an EXPORT must not count.
+#
+# EMPTY as of 2026-09-23, for the same reason as the mapping above: it held
+# `["Reviewer Notes"]` because that column existed only in Review.xlsx, so on the
+# exported side it always read empty and every row carrying a note reported as a
+# change on every run, forever. Declared in the output rather than dropped,
+# because a report that cannot see a column should say so instead of quietly
+# ignoring it.
+NOT_COMPARED: list[str] = []
 
 
 def _harvest_review(d: Path, canon) -> dict:
-    """Read Review.xlsx and match its rows to canonical history.
+    """Read Review.xlsx and report what changed since `canon`.
 
-    Read-only: this is the audit path, not a sync. Returns matched
-    updates, rows with no canonical counterpart, and conflicts -- where the
-    colleague's value differs from a NON-EMPTY canonical value, which is
-    reported rather than silently resolved.
+    Read-only: this is the audit path, not a sync.
+
+    A DELTA, not a reconciliation. `canon` is expected to be an `export-history`
+    output -- the same record as it stood at the previous run -- so a difference
+    between the two IS the change being asked for. The older framing called that
+    a "conflict", which only made sense while a second, separately maintained
+    record existed to disagree with; calling it one now would label every
+    colleague decision as a discrepancy.
+
+    A company whose identity cannot be settled is neither: nothing about it can
+    be compared, so it is reported apart from the changes rather than inside them.
     """
     from openpyxl import load_workbook
 
-    aliases = load_aliases(d.parent / "company-aliases.csv")
+    alias_table = load_aliases(d.parent / "company-aliases.csv")
     wb = load_workbook(d / "Review.xlsx", read_only=True, data_only=True)
     ws = wb["Review"] if "Review" in wb.sheetnames else wb.active
     header = [c.value for c in next(ws.iter_rows(min_row=2, max_row=2))]
 
-    updates: list[dict] = []
+    changes: list[dict] = []
     new_rows: list[dict] = []
-    conflicts: list[dict] = []
+    unresolved: list[dict] = []
 
     for row in ws.iter_rows(min_row=3, values_only=True):
         if not row or not row[0]:
@@ -1778,10 +2133,12 @@ def _harvest_review(d: Path, canon) -> dict:
         values = {header[i]: row[i] for i in range(min(len(header), len(row)))}
         name = str(values.get("Company / Outreach Account") or "").strip()
         cid = str(values.get("Company ID") or "").strip()
-        m = match_company(name, canon, aliases=aliases, company_id=cid)
+        m = match_company(name, canon, aliases=alias_table.mapping, company_id=cid)
 
         if m.kind == "matched":
             for col in HARVEST_COLUMNS:
+                if col in NOT_COMPARED:
+                    continue
                 raw_incoming = values.get(col)
                 if raw_incoming in (None, ""):
                     continue
@@ -1799,30 +2156,41 @@ def _harvest_review(d: Path, canon) -> dict:
                 canonical_col = REVIEW_TO_A4_COLUMN.get(col, col)
                 current = m.row.get(canonical_col).strip()
                 # Compare as VALUES, not strings: a date written to the workbook
-                # comes back as '2026-09-03 00:00:00' against the CSV's
-                # '03/09/2026', and a string compare flags every row.
+                # comes back as a real date against the CSV's text, and a string
+                # compare flags every row.
                 if same_value(col, current, incoming):
-                    continue  # already in agreement -- nothing to write, nothing to report
-                if current:
-                    conflicts.append(
-                        {"company": m.row.company, "column": col, "canonical": current[:90], "review": incoming[:90]}
-                    )
-                updates.append(
-                    {"row_index": m.row.index, "company": m.row.company, "column": col, "value": incoming,
-                     "existing": current}
+                    continue  # already in agreement -- nothing changed, nothing to report
+                changes.append(
+                    {"company": m.row.company, "column": col, "was": current[:90], "now": incoming[:90]}
                 )
         elif m.kind == "unmatched":
             new_rows.append({"company": name, "values": values})
         else:
-            conflicts.append(
-                {"company": name, "column": "(identity)", "canonical": m.reason, "review": f"candidates: {[c.company for c in m.candidates][:3]}"}
+            unresolved.append(
+                {
+                    "company": name,
+                    "reason": m.reason,
+                    "candidates": [c.company for c in m.candidates][:3],
+                }
             )
     wb.close()
-    return {"updates": updates, "new_rows": new_rows, "conflicts": conflicts}
+    return {
+        "changes": changes,
+        "new_rows": new_rows,
+        "unresolved": unresolved,
+        "aliases": alias_table.report(),
+    }
 
 
 def cmd_harvest(args: argparse.Namespace) -> int:
-    """Report what colleagues decided. Never writes. This is the audit command."""
+    """Report what colleagues decided since the export at `--history`. Never writes.
+
+    Point `--history` at the previous run's `export-history` output. The two files
+    are then one record at two moments, and every difference is a decision somebody
+    made -- which is what this command exists to surface. `export-history` is
+    read-only, so the previous run's CSV can be kept beside the run that produced
+    it without either command writing to the other's file.
+    """
     d = Path(args.dir)
     if not (d / "Review.xlsx").exists():
         print(json.dumps({"ok": False, "error": f"{d / 'Review.xlsx'} does not exist"}, ensure_ascii=False))
@@ -1831,17 +2199,25 @@ def cmd_harvest(args: argparse.Namespace) -> int:
     h = _harvest_review(d, canon)
     out = {
         "review": str(d / "Review.xlsx"),
-        "canonical": str(args.history),
-        "updates": len(h["updates"]),
-        "companies_updated": len({u["row_index"] for u in h["updates"]}),
+        "compared_against": str(args.history),
+        "changes": len(h["changes"]),
+        "changed_companies": len({c["company"] for c in h["changes"]}),
         "new_companies": len(h["new_rows"]),
-        "conflicts": len(h["conflicts"]),
+        "unresolved": len(h["unresolved"]),
+        # Columns the export cannot carry, so this comparison cannot see them.
+        "not_compared": NOT_COMPARED,
+        "aliases": h["aliases"],
     }
-    if args.verbose:
-        out["update_detail"] = h["updates"]
-        out["new_detail"] = [r["company"] for r in h["new_rows"]]
-    if h["conflicts"]:
-        out["conflict_detail"] = h["conflicts"][:40]
+    # The detail IS the report: "3 changes" does not say what a colleague did, and
+    # that is the question this command exists to answer. Capped by default so a
+    # long delta stays readable, uncapped with --verbose.
+    def capped(items: list) -> list:
+        return items if args.verbose else items[:40]
+
+    out["change_detail"] = capped(h["changes"])
+    out["new_detail"] = capped([r["company"] for r in h["new_rows"]])
+    if h["unresolved"]:
+        out["unresolved_detail"] = capped(h["unresolved"])
     print(json.dumps(out, indent=2, ensure_ascii=False))
     return 0
 
@@ -1906,7 +2282,31 @@ def main() -> int:
             q.add_argument("--out", help="where to write the CSV (default: <dir>/_machine/review-history.csv)")
         if name == "migrate-review":
             q.add_argument("--from", dest="source", help="read the old sheet from here instead (e.g. a backup)")
+            q.add_argument(
+                "--to",
+                metavar="FILENAME",
+                help="write the rebuilt sheet under this name in --dir instead of Review.xlsx, so the "
+                "live file is left untouched while somebody is still editing it. A bare filename, not "
+                "a path: the sheet has to land in the folder the other commands read.",
+            )
             q.add_argument("--force", action="store_true", help="migrate even if some status values are unmapped")
+            q.add_argument(
+                "--export-dropped",
+                metavar="DIR",
+                help="write every column that leaves the schema to a CSV in DIR, before rebuilding. "
+                "Dropped columns are otherwise carried NOWHERE -- they survive only inside "
+                "_machine/backups -- so this is the safety net for a schema change that removes real data.",
+            )
+            q.add_argument(
+                "--reinterpret",
+                action="append",
+                default=[],
+                metavar="OLD=NEW",
+                help="re-read a status value that is STILL in the vocabulary (repeatable), e.g. "
+                "'Not started=New job found'. LEGACY_CONTACT_STATUS cannot express this: the census "
+                "skips any value already in the vocabulary, so a live value never reaches the "
+                "translation branch. Requires --dry-run to be read first.",
+            )
         if name == "harvest":
             q.add_argument("--verbose", action="store_true")
         q.set_defaults(func=fn)

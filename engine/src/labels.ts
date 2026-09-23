@@ -1,6 +1,14 @@
 // Explicit mapping from engine decision to A1 qualitative labels.
 // A1 rule: pertinente/adiacente only with a read, reliable description;
 // score 0-100 is optional and never replaces the label.
+//
+// NOT on an execution path. `test/labels-calibration.mjs` is its only caller, and
+// that is deliberate rather than an oversight: A1 puts the label on the AGENT
+// (read each description, then judge), so there is no runtime point at which the
+// engine could apply it. The function is the rule written as executable
+// assertions — a check on the running code's behaviour, not a step in it. Wiring
+// it in would put a judgement behind a flag, which is what cli.ts exists not to
+// do.
 import type { A1Label, Decision } from './types.js';
 
 export function decisionToA1(

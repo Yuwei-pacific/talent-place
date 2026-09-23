@@ -31,7 +31,10 @@ from datetime import datetime  # noqa: E402
 from sync_export import (  # noqa: E402
     A4_COLUMNS,
     CF_RANGE_ROWS,
+    CONTACT_STATUS_ORDER,
+    CONTACT_STATUS_VALUES,
     NOT_RECOVERABLE_FROM_FLAT_TSV,
+    REVIEW_TO_A4_COLUMN,
     StageError,
     TRACKING_PARAMS,
     load_evidence,
@@ -39,6 +42,7 @@ from sync_export import (  # noqa: E402
     REVIEW_COLUMNS,
     VERIFICATION_PREFIXES,
     explode_roles,
+    evidence_report,
     validate_rows,
 )
 from reconcile import (  # noqa: E402
@@ -47,6 +51,7 @@ from reconcile import (  # noqa: E402
     MACHINE_UNION_COLS,
     MULTI_VALUE_SPEC,
     find_duplicate_names,
+    load_aliases,
     load_canonical,
     match_company,
     norm_company,
@@ -235,6 +240,9 @@ PARITY_CASES = [
     ("Work Modes", "On-site"),
     ("Sources / Portals", "LinkedIn Jobs; iAgora (mirror annuncio aziendale)"),
     ("Matching Job Titles", "1. A Intern | 2. B Intern"),
+    ("Matching Score", "1. 92 | 2. 78 | 3. 68"),
+    ("Matching Score", "1. 92"),
+    ("Matching Score", "92"),
     ("Matching Job Titles", "1. A Intern\n2. B Intern"),
     ("Matching Job Titles", "1. Intern - Level 2. Design"),
     ("Matching Job Titles", "1. Analyst, 3.5 days a week"),
@@ -267,11 +275,27 @@ class TestRoleEvidence(TmpDirCase):
     """
 
     def _row(self, links: str, titles: str, count: str) -> list[str]:
-        row = [
-            "Amplifon", "", "Yes", "Milan, Lombardy, Italy", "CRM / Customer Intelligence",
-            titles, links, count, "", "", "", "No", "Not started", "", "", "", "Review",
-            "", "Portal verified", "2026-09-17", "", "",
-        ]
+        # Built BY NAME and emitted in A4_COLUMNS order. This was a positional
+        # literal, and the moment the schema moved (2026-09-23) every value from
+        # `Matching Job Titles` on landed in the wrong column -- while the tab
+        # count stayed a correct 22, which is precisely the failure
+        # `validate_rows` exists to catch. It was catching the fixture instead of
+        # the test.
+        values = {
+            "Company / Outreach Account": "Amplifon",
+            "In Italy?": "Yes",
+            "Locations": "Milan, Lombardy, Italy",
+            "Master-fit Themes": "CRM / Customer Intelligence",
+            "Matching Job Titles": titles,
+            "Job Links": links,
+            "Role Count": count,
+            "Previously Contacted?": "No",
+            "Contact Search Status": "Not started",
+            "Outreach Decision": "Review",
+            "Verification Status": "Portal verified",
+            "Last Checked": "2026-09-17",
+        }
+        row = [values.get(c, "") for c in A4_COLUMNS]
         self.assertEqual(len(row), len(A4_COLUMNS))
         return row
 
@@ -295,6 +319,45 @@ class TestRoleEvidence(TmpDirCase):
         # in the set of columns a live run cannot supply.
         self.assertNotIn("Alternate / Portal URLs", NOT_RECOVERABLE_FROM_FLAT_TSV)
         self.assertIn("Posted / Result Age", NOT_RECOVERABLE_FROM_FLAT_TSV)
+
+    def test_the_report_names_a_column_the_sidecar_never_reached(self):
+        """`columns_without_source` was keyed on the presence of `--evidence`, not
+        on whether a single row joined. A run that followed A1 and wrote the
+        EMPLOYER url into the TSV -- A1 prefers it over the portal url -- got a
+        total join miss and a manifest declaring nothing missing.
+
+        The sidecar is keyed by API url here and the TSV carries a different one,
+        which is exactly the employer-vs-portal shape.
+        """
+        sidecar = {"roles": {"https://x.example/job/1": {"posted": "3 days ago"}}, "checks": {}}
+        row = self._row("1. https://employer.example/1", "1. First Intern", "1")
+        roles, _ = explode_roles([row], sidecar)
+
+        report = evidence_report(roles, sidecar, "/run")
+        self.assertEqual(report["filled"]["Posted / Result Age"], "0/1")
+        self.assertIn("Posted / Result Age", report["without_source"])
+        self.assertEqual(report["sidecar_rows"], 1, "the sidecar had a row; it just did not join")
+        self.assertIn("portal URL", report["note"])
+
+    def test_a_joined_column_reports_its_count(self):
+        sidecar = {"roles": {"https://a.example/1": {"posted": "3 days ago"}}, "checks": {}}
+        row = self._row("1. https://a.example/1 | 2. https://a.example/2", "1. First Intern | 2. Second Intern", "2")
+        roles, _ = explode_roles([row], sidecar)
+
+        report = evidence_report(roles, sidecar, "/run")
+        self.assertEqual(report["filled"]["Posted / Result Age"], "1/2")
+        self.assertNotIn("Posted / Result Age", report["without_source"])
+        self.assertEqual(report["filled"]["Search Query"], "0/2")
+        self.assertIn("Search Query", report["without_source"])
+        self.assertNotIn("note", report, "a partial join is not a failure to declare")
+
+    def test_without_evidence_every_derived_column_is_without_source(self):
+        row = self._row("1. https://a.example/1", "1. First Intern", "1")
+        roles, _ = explode_roles([row], None)
+        report = evidence_report(roles, {"roles": {}, "checks": {}}, None)
+        self.assertEqual(report["sidecar_rows"], 0)
+        self.assertEqual(sorted(report["without_source"]), sorted(report["filled"]))
+        self.assertNotIn("note", report, "no sidecar was offered, so no join failed")
 
     def _write_evidence(self, text: str) -> str:
         path = Path(self.tmp) / "role-evidence.csv"
@@ -446,9 +509,17 @@ class TestSplitter(TmpDirCase):
         self.assertEqual(split_column("Alt. Text Intern", "Matching Job Titles"), ["Alt. Text Intern"])
 
     def test_free_text_columns_refuse_to_split(self):
-        for col in ("Notes", "Curricular Evidence", "Reviewer Notes", "Matching Notes"):
+        for col in ("Notes", "Curricular Evidence"):
             with self.assertRaises(KeyError):
                 split_column("a; b", col)
+
+    def test_matching_score_is_a_numbered_list_like_its_siblings(self):
+        """It shares ONE index with `Matching Job Titles` and `Job Links`, which is
+        the whole reason it is written `1. 92 | 2. 78` and not as a bare number:
+        the N-th score belongs to the N-th role."""
+        self.assertEqual(split_column("1. 92 | 2. 78 | 3. 68", "Matching Score"), ["92", "78", "68"])
+        self.assertEqual(split_column("1. 92", "Matching Score"), ["92"])
+        self.assertEqual(split_column("", "Matching Score"), [])
 
     def test_degenerate_input(self):
         for empty in ("", "   ", None):
@@ -481,6 +552,40 @@ class TestSplitter(TmpDirCase):
             if py_val != ts_val:
                 mismatches.append(f"  col={col!r} val={val[:50]!r}\n    py={py_val}\n    ts={ts_val}")
         self.assertEqual(mismatches, [], "TS/Python splitter drift:\n" + "\n".join(mismatches))
+
+    def test_the_two_specs_are_equal_not_just_agreeing_on_samples(self):
+        """`PARITY_CASES` compares BEHAVIOUR on inputs somebody chose, so a column
+        added to one side and not the other is invisible until someone splits it.
+
+        That is not hypothetical: `Matching Score` was added to `reconcile.py` on
+        2026-09-23 and the case-list test stayed green, because no case named it.
+        The contract is that the two SPECS are the same, so assert that directly.
+        """
+        if not TS_LIB.exists():
+            self.skipTest(f"{TS_LIB} missing — run `npm run build` in engine/ first")
+        if shutil.which("node") is None:
+            self.skipTest("node not on PATH")
+        # Normalise both sides: TS omits a falsy flag, Python spells the marker
+        # `alt_marker`. Absolute paths differ, so only the three flags are read.
+        script = (
+            'import("./lib/normalize.js").then(({MULTI_VALUE_SPEC}) => {'
+            "  const norm = Object.fromEntries(Object.entries(MULTI_VALUE_SPEC).map(([k, v]) => [k, {"
+            "    semicolon: !!v.semicolon, numbered: !!v.numbered, altMarker: !!v.altMarker }]));"
+            "  console.log(JSON.stringify(norm));"
+            "});"
+        )
+        proc = subprocess.run(["node", "-e", script], cwd=str(ENGINE), capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr[:400])
+        ts_spec = json.loads(proc.stdout.strip().splitlines()[-1])
+        py_spec = {
+            col: {
+                "semicolon": bool(spec.get("semicolon")),
+                "numbered": bool(spec.get("numbered")),
+                "altMarker": bool(spec.get("alt_marker")),
+            }
+            for col, spec in MULTI_VALUE_SPEC.items()
+        }
+        self.assertEqual(ts_spec, py_spec, "MULTI_VALUE_SPEC drifted between reconcile.py and normalize.ts")
 
     def test_norm_role_url_keeps_identity_and_drops_tracking(self):
         """The query is not noise. Part of it names the posting.
@@ -580,6 +685,16 @@ class TestDates(unittest.TestCase):
         self.assertEqual(parse_date("17/07/2026").isoformat(), "2026-07-17")
         self.assertEqual(parse_date("3/9/2026").isoformat(), "2026-09-03")
 
+    def test_reads_an_iso_datetime(self):
+        """The form `export-history` used to write: str() of the cell's datetime.
+
+        Tolerating it is separate from no longer writing it. Exports already on
+        disk hold this form, and a reader that cannot read yesterday's file
+        reports phantom change until somebody re-exports it.
+        """
+        self.assertEqual(parse_date("2026-09-03 00:00:00").isoformat(), "2026-09-03")
+        self.assertEqual(parse_date("2026-09-03T14:30:00").isoformat(), "2026-09-03")
+
     def test_unparseable_and_empty(self):
         for bad in ("", "   ", None, "garbage", "2026-13-45", "n/a"):
             self.assertIsNone(parse_date(bad))
@@ -643,6 +758,40 @@ class TestCanonical(unittest.TestCase):
         m = match_company("A Completely Unrelated Name", self.canon, company_id=row.company_id)
         self.assertEqual(m.kind, "matched")
         self.assertEqual(m.reason, "company id")
+
+
+class TestAliasTable(TmpDirCase):
+    """`load_aliases` is the only reader of the human-maintained alias table, and
+    rung 3 of the matching ladder cannot fire without it. A silent `{}` made "the
+    file is missing" and "no aliases are needed" the same answer."""
+
+    def test_a_missing_file_is_reported_not_silently_empty(self):
+        table = load_aliases(self.tmp / "company-aliases.csv")
+        self.assertEqual(table.mapping, {})
+        self.assertEqual(table.report()["loaded"], 0)
+        self.assertIn("not found", table.note)
+
+    def test_it_reports_what_it_loaded(self):
+        f = self.tmp / "company-aliases.csv"
+        f.write_text(
+            "alias_norm;canonical_id;note\n"
+            "bof careers;polids-6556667b;BoF Careers republished a Moncler role\n",
+            encoding="utf-8",
+        )
+        table = load_aliases(f)
+        self.assertEqual(table.mapping, {"bof careers": "polids-6556667b"})
+        self.assertEqual(table.report(), {"file": str(f), "loaded": 1})
+        self.assertEqual(table.note, "")
+
+    def test_a_header_only_file_is_reported_as_empty(self):
+        # archive/company-aliases.csv is exactly this shape: 29 bytes and a
+        # header. Restoring it verbatim would reproduce the silence it was
+        # archived for.
+        f = self.tmp / "company-aliases.csv"
+        f.write_text("alias_norm;canonical_id;note\n", encoding="utf-8")
+        table = load_aliases(f)
+        self.assertEqual(table.mapping, {})
+        self.assertIn("no aliases", table.note)
 
 
 class TestCompanyId(unittest.TestCase):
@@ -758,20 +907,38 @@ class TestReviewWorkbook(TmpDirCase):
     on it. Both must leave real dates and must not mis-address a column."""
 
     def make_canon(self):
+        # Built BY NAME and written out in A4_COLUMNS order. These rows used to be
+        # positional literals, 23 cells with no label on any of them -- and when
+        # the column set moved on 2026-09-23 every one of them silently landed in
+        # the wrong column, which no assertion caught because the assertions are
+        # by name. A positional row is a fact about a column ORDER, and the order
+        # is not the contract.
         p = self.tmp / "canon.csv"
         rows = [
-            ["Alpha Srl", "", "Yes", "Milan, Italy", "CRM", "1. Intern", "1. https://a/1", "1",
-             "", "", "", "No", "Contacted", "Jane", "HR", "j@a.com", "Review", "machine note",
-             "Employer verified active", "2026-09-15", "17/07/2026", "15/10/2026", "polids-aaaaaaaa"],
-            ["Beta Srl", "", "Yes", "Rome, Italy", "CRM", "1. Intern", "1. https://b/1", "1",
-             "", "", "", "No", "Not started", "", "", "", "Review", "", "Portal verified",
-             "2026-09-14", "", "", "polids-bbbbbbbb"],
+            {"Company / Outreach Account": "Alpha Srl", "In Italy?": "Yes",
+             "Locations": "Milan, Italy", "Master-fit Themes": "CRM",
+             "Matching Job Titles": "1. Intern", "Matching Score": "1. 90",
+             "Job Links": "1. https://a/1", "Role Count": "1",
+             "Previously Contacted?": "No", "Contact Search Status": "No suitable contact",
+             "Contact Name": "Jane", "Contact Role": "HR",
+             "Contact Email / LinkedIn": "j@a.com", "Outreach Decision": "Review",
+             "Notes": "machine note", "Verification Status": "Employer verified active",
+             "Last Checked": "2026-09-15", "First Contact Date": "17/07/2026",
+             "Recall": "15/10/2026", "Company ID": "polids-aaaaaaaa"},
+            {"Company / Outreach Account": "Beta Srl", "In Italy?": "Yes",
+             "Locations": "Rome, Italy", "Master-fit Themes": "CRM",
+             "Matching Job Titles": "1. Intern", "Matching Score": "1. 70",
+             "Job Links": "1. https://b/1", "Role Count": "1",
+             "Previously Contacted?": "No", "Contact Search Status": "Not started",
+             "Outreach Decision": "Review", "Verification Status": "Portal verified",
+             "Last Checked": "2026-09-14", "Company ID": "polids-bbbbbbbb"},
         ]
         hdr = A4_COLUMNS + ["Company ID"]
         with p.open("w", encoding="utf-8", newline="") as fh:
             w = csv.writer(fh, delimiter=";")
             w.writerow(hdr)
-            w.writerows(rows)
+            for r in rows:
+                w.writerow([r.get(c, "") for c in hdr])
         return p
 
     def run_cmd(self, *args):
@@ -786,15 +953,16 @@ class TestReviewWorkbook(TmpDirCase):
         self.assertEqual(again.returncode, 1, "must refuse: the file holds colleague edits")
         self.assertIn("already exists", again.stdout)
 
-    def test_columns_and_split_notes(self):
+    def test_columns_and_score_notes_split(self):
         self.init()
         from openpyxl import load_workbook
 
         ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
         header = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
         self.assertEqual(header, REVIEW_COLUMNS)
-        self.assertEqual(len(header), 22)
-        self.assertNotIn("Notes", header, "Notes must be split")
+        self.assertEqual(len(header), 21)
+        self.assertNotIn("Matching Notes", header, "the machine half is a score column now")
+        self.assertNotIn("Reviewer Notes", header, "the two notes columns merged into `Notes`")
         # Both stay in A4 and in the TSV; Review.xlsx stops rendering them.
         # "Previously Contacted?" is in HUMAN_COLS, so `stage` still copies it
         # into the Company Summary sheet -- the value is not lost, only the
@@ -802,11 +970,15 @@ class TestReviewWorkbook(TmpDirCase):
         for gone in ("Previously Contacted?", "Outreach Decision"):
             self.assertNotIn(gone, header, f"{gone} should no longer be rendered in Review.xlsx")
             self.assertIn(gone, A4_COLUMNS, f"{gone} must stay an A4 column")
-        self.assertIn("Matching Notes", header)
-        self.assertIn("Reviewer Notes", header)
-        # historical Notes seeds the machine column; the human column starts empty
-        self.assertEqual(ws.cell(3, header.index("Matching Notes") + 1).value, "machine note")
-        self.assertEqual(ws.cell(3, header.index("Reviewer Notes") + 1).value, None)
+        # `Brands / Business Units` is the ONE column that left A4 as well
+        # (2026-09-23), which is exactly why it cannot join the loop above: that
+        # loop's second assertion is about surviving in A4.
+        self.assertNotIn("Brands / Business Units", header)
+        self.assertNotIn("Brands / Business Units", A4_COLUMNS)
+        # Historical `Notes` seeds the workbook's `Notes`; the score column starts
+        # empty, because only a run supplies one.
+        self.assertEqual(ws.cell(3, header.index("Notes") + 1).value, "machine note")
+        self.assertEqual(ws.cell(3, header.index("Matching Score") + 1).value, None)
 
     def test_dates_are_real_dates_not_text(self):
         """If these are strings, `<=TODAY()` compares text and silently lies."""
@@ -848,14 +1020,14 @@ class TestReviewWorkbook(TmpDirCase):
 
     def test_unparseable_date_is_reported_not_silently_converted(self):
         p = self.make_canon()
-        text = p.read_text(encoding="utf-8").replace("2026-09-15", "Brands / Business Units")
+        text = p.read_text(encoding="utf-8").replace("2026-09-15", "NOT A DATE")
         p.write_text(text, encoding="utf-8")
         proc = self.run_cmd("init-review", "--dir", str(self.tmp), "--history", str(p))
         self.assertEqual(proc.returncode, 0)
         out = json.loads(proc.stdout)
         self.assertIn("unparseable_dates", out)
         self.assertEqual(len(out["unparseable_dates"]), 1)
-        self.assertEqual(out["unparseable_dates"][0]["value"], "Brands / Business Units")
+        self.assertEqual(out["unparseable_dates"][0]["value"], "NOT A DATE")
 
     def test_color_install_and_addresses_the_right_columns(self):
         self.init()
@@ -874,18 +1046,27 @@ class TestReviewWorkbook(TmpDirCase):
         row_range = f"A3:{last}{CF_RANGE_ROWS}"
 
         # The whole row, one rule per coloured status, all anchored on the
-        # status cell. "Not started" has no rule because white is the sheet's
-        # own background -- the default costs nothing to maintain.
+        # status cell. `New job found` has no rule because white is the sheet's
+        # own background and it is the machine's default -- the commonest row
+        # costs nothing to maintain.
         self.assertIn(row_range, by_range, f"expected a whole-row rule on {row_range}, got {sorted(by_range)}")
         formulas = by_range[row_range]
-        self.assertEqual(len(formulas), 4, f"one rule per coloured status, got {formulas}")
-        for value in ("Job not suitable", "Potential contact", "Contact found", "Job found"):
-            self.assertIn(f'${status}3="{value}"', formulas)
-        self.assertNotIn(
-            f'${status}3="Not started"',
-            formulas,
-            "Not started must rely on the sheet background, not a rule",
-        )
+        # Six exact-match rules, plus a seventh that reddens any status outside
+        # the closed set -- see
+        # test_color_reddens_a_status_outside_the_closed_set.
+        self.assertEqual(len(formulas), 7, f"six statuses plus the fallback, got {formulas}")
+
+        # Derived from the vocabulary rather than listed, because a status with
+        # no rule renders WHITE -- indistinguishable from the default, which is
+        # the one thing A4 §31 keeps the list closed to prevent. Adding a value
+        # must fail here rather than ship invisibly.
+        for value in CONTACT_STATUS_ORDER:
+            covered = f'${status}3="{value}"' in formulas
+            self.assertEqual(
+                covered,
+                value != "New job found",
+                f"{value!r}: only the machine default may rely on the sheet background",
+            )
 
         # The status rule must NOT reference the date column any more. The old
         # ruleset did, to detect contradictions, and that branch was removed on
@@ -897,6 +1078,41 @@ class TestReviewWorkbook(TmpDirCase):
         # Recall keeps its own two rules, on its own column.
         recall = get_column_letter(header.index("Recall") + 1)
         self.assertIn(f"{recall}2:{recall}{CF_RANGE_ROWS}", by_range)
+
+    def test_color_reddens_a_status_outside_the_closed_set(self):
+        # White is the sheet's own background and "Not started" deliberately has
+        # no rule, so without a fallback a value outside the closed set is
+        # indistinguishable from "Not started": a row someone has worked on
+        # reads as untouched. The fallback makes it loud instead.
+        self.init()
+        self.assertEqual(self.run_cmd("color", "--dir", str(self.tmp)).returncode, 0)
+
+        from openpyxl import load_workbook
+
+        ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
+        header = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
+        by_range: dict[str, list[str]] = {}
+        for rng, rules in ws.conditional_formatting._cf_rules.items():
+            by_range[str(rng.sqref)] = [r.formula[0] for r in rules]
+
+        status = get_column_letter(header.index("Contact Search Status") + 1)
+        last = get_column_letter(len(REVIEW_COLUMNS))
+        formulas = by_range[f"A3:{last}{CF_RANGE_ROWS}"]
+
+        # Last, so the four exact-match rules keep priority over it.
+        fallback = formulas[-1]
+        self.assertIn(
+            f'${status}3<>""',
+            fallback,
+            "the fallback must leave an empty status alone: A4 uses empty for 'not stated'",
+        )
+        for value in CONTACT_STATUS_VALUES:
+            self.assertIn(
+                f'${status}3<>"{value}"',
+                fallback,
+                "the exclusion list must be derived from CONTACT_STATUS_VALUES, so adding a "
+                "status to the vocabulary cannot silently start rendering it as a mistake",
+            )
 
     def test_color_is_idempotent(self):
         self.init()
@@ -931,9 +1147,9 @@ class TestReviewWorkbook(TmpDirCase):
     def test_init_review_carries_a_superseded_status_forward(self):
         """A new file must not be born outside the vocabulary.
 
-        `make_canon` seeds `Contact Search Status = Contacted`, which A4 lists
-        under LEGACY_CONTACT_STATUS. `migrate-review` translates those on a live
-        sheet; `init-review` used to copy them verbatim, so a freshly created
+        `make_canon` seeds `Contact Search Status = No suitable contact`, which A4
+        lists under LEGACY_CONTACT_STATUS. `migrate-review` translates those on a
+        live sheet; `init-review` used to copy them verbatim, so a freshly created
         workbook failed doctor's closed-set check on its first run.
         """
         self.init()
@@ -942,7 +1158,7 @@ class TestReviewWorkbook(TmpDirCase):
         ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
         header = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
         ci = header.index("Contact Search Status") + 1
-        self.assertEqual(ws.cell(3, ci).value, "Contact found", "Contacted is a superseded value")
+        self.assertEqual(ws.cell(3, ci).value, "Job not suitable", "`No suitable contact` is superseded")
         self.assertEqual(ws.cell(4, ci).value, "Not started", "a current value passes through")
 
     def test_doctor_passes_a_workbook_whose_values_fit_their_columns(self):
@@ -965,8 +1181,11 @@ class TestReviewWorkbook(TmpDirCase):
         wb = load_workbook(self.tmp / "Review.xlsx")
         ws = wb["Review"]
         header = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
-        # `Contacted` is a superseded value: A4 lists it under LEGACY_CONTACT_STATUS.
-        ws.cell(3, header.index("Contact Search Status") + 1, "Contacted")
+        # A value that is in NEITHER the vocabulary nor the legacy map. `Contacted`
+        # used to serve here, until it became a live status on 2026-09-23 -- which
+        # is what this check is for: a status the vocabulary does not know paints
+        # the row white, and white is the default.
+        ws.cell(3, header.index("Contact Search Status") + 1, "chiamato forse")
         wb.save(self.tmp / "Review.xlsx")
 
         proc = self.run_cmd("doctor", "--dir", str(self.tmp))
@@ -1161,10 +1380,16 @@ class TestAppend(TmpDirCase):
     cells are touched, no style is ever written, machine-owned dates are carried
     and human-owned ones are not invented."""
 
-    def build(self, review_rows):
-        """Build a Review.xlsx with REVIEW_COLUMNS and the given data rows."""
+    def build(self, review_rows, root=None):
+        """Build a Review.xlsx with REVIEW_COLUMNS and the given data rows.
+
+        `root` defaults to the temp dir itself. Passing a subdirectory is for the
+        tests that need the publish root -- the level where `company-aliases.csv`
+        lives -- to be inside the temp dir rather than its parent.
+        """
         from openpyxl import Workbook
 
+        d = root or self.tmp
         wb = Workbook()
         ws = wb.active
         ws.title = "Review"
@@ -1174,12 +1399,13 @@ class TestAppend(TmpDirCase):
             for c, name in enumerate(REVIEW_COLUMNS, start=1):
                 if row.get(name):
                     ws.cell(3 + i, c, row[name])
-        wb.save(self.tmp / "Review.xlsx")
+        wb.save(d / "Review.xlsx")
 
-    def stage_run(self, companies):
+    def stage_run(self, companies, root=None):
         """Write a _machine/companies-<run>.csv as `stage` would, plus a manifest."""
+        d = root or self.tmp
         run = "20260916-000000"
-        machine = synced_fs.ensure_dir(self.tmp / "_machine")
+        machine = synced_fs.ensure_dir(d / "_machine")
         with (machine / f"companies-{run}.csv").open("w", encoding="utf-8", newline="") as fh:
             w = csv.writer(fh, delimiter=";")
             w.writerow(A4_COLUMNS)
@@ -1207,12 +1433,45 @@ class TestAppend(TmpDirCase):
         row.update(over)
         return row
 
-    def run_append(self, *extra):
+    def run_append(self, *extra, root=None):
         return subprocess.run(
-            [sys.executable, str(HERE / "sync_export.py"), "append", "--dir", str(self.tmp), *extra],
+            [sys.executable, str(HERE / "sync_export.py"), "append", "--dir", str(root or self.tmp), *extra],
             capture_output=True,
             text=True,
         )
+
+    def test_the_summary_reports_the_alias_table_it_matched_with(self):
+        # The table lives at the publish root, one level above the Master dir:
+        # a portal name is not a per-Master distinction.
+        master = self.tmp / "Strategic design ED.28"
+        master.mkdir()
+        self.build([{"Company / Outreach Account": "Esistente Srl", "Company ID": "polids-11111111"}], root=master)
+        self.stage_run([self.new_company("Nuova Azienda Srl")], root=master)
+
+        out = json.loads(self.run_append(root=master).stdout)
+        self.assertEqual(out["aliases"]["file"], str(self.tmp / "company-aliases.csv"))
+        self.assertEqual(out["aliases"]["loaded"], 0)
+        self.assertIn("not found", out["aliases"]["note"])
+
+    def test_a_populated_alias_table_matches_the_variant_spelling(self):
+        # The end-to-end payoff for rung 3: without the table this role is
+        # deferred as a new company, because "BoF Careers" is a portal name and
+        # normalises to nothing already in the sheet.
+        master = self.tmp / "Strategic design ED.28"
+        master.mkdir()
+        self.build([{"Company / Outreach Account": "Moncler", "Company ID": "polids-6556667b"}], root=master)
+        (self.tmp / "company-aliases.csv").write_text(
+            "alias_norm;canonical_id;note\n"
+            "bof careers;polids-6556667b;BoF Careers republished a Moncler role\n",
+            encoding="utf-8",
+        )
+        self.stage_run([self.new_company("BoF Careers")], root=master)
+
+        out = json.loads(self.run_append(root=master).stdout)
+        self.assertEqual(out["aliases"]["loaded"], 1)
+        self.assertEqual(out["already_present"], 1, "rung 3 must match the alias, not defer it")
+        self.assertEqual(out["to_append"], 0)
+        self.assertEqual(out["deferred"], 0)
 
     def test_appends_only_new_companies(self):
         self.build([{"Company / Outreach Account": "Esistente Srl", "Company ID": "polids-11111111"}])
@@ -1343,7 +1602,7 @@ class TestAppend(TmpDirCase):
             {
                 "Matching Job Titles": "1. Service Design Intern",
                 "Job Links": "1. https://example.com/vecchio",
-                "Matching Notes": "[NEW COMPANY] [pertinente] Match score: 90/100; nota",
+                "Notes": "[NEW COMPANY] [pertinente] Match score: 90/100; nota",
             },
             {"Company / Outreach Account": "Delta Srl"},
         ])
@@ -1365,11 +1624,11 @@ class TestAppend(TmpDirCase):
         """The sidecar replaces a refused append, so it has to be as complete.
 
         It was not. It looked the columns up in the A4-shaped dict — where the
-        machine notes column is `Notes`, not `Matching Notes` — and the two values
-        that exist only inside the append loop (`Contact Search Status` from
-        A4's defaults, `Company ID` from `propose_company_id`) were absent from
-        that dict entirely. Three columns came out empty on every row of every
-        sidecar, including the A4-mandated per-role justification.
+        notes column has no Review-specific name — and the two values that exist
+        only inside the append loop (`Contact Search Status` from A4's defaults,
+        `Company ID` from `propose_company_id`) were absent from that dict
+        entirely. Three columns came out empty on every row of every sidecar,
+        including the A4-mandated per-role justification.
         """
         self.build([{"Company / Outreach Account": "Esistente Srl"}])
         self.stage_run([self.new_company("Nuova Srl")])
@@ -1387,12 +1646,12 @@ class TestAppend(TmpDirCase):
         self.assertEqual(len(rows), 1)
         row = rows[0]
         self.assertEqual(row["Company / Outreach Account"], "Nuova Srl")
-        self.assertEqual(row["Matching Notes"], "machine note", "the A4 justification was always empty")
-        self.assertEqual(row["Contact Search Status"], "Not started", "the status default was always empty")
+        self.assertEqual(row["Notes"], "machine note", "the A4 justification was always empty")
+        self.assertEqual(row["Contact Search Status"], "New job found", "the status default was always empty")
         # Determinstic, so this is also the id a later `append` would propose --
         # pasting the sidecar and appending it later cannot mint two identities.
         self.assertEqual(row["Company ID"], propose_company_id("Nuova Srl"), "the id was always empty")
-        self.assertEqual(row["Reviewer Notes"], "", "the machine never writes the colleague's column")
+        self.assertEqual(row["Matching Score"], "", "a score only exists if a run read a description")
         self.assertEqual(row["Last Checked"], "2026-09-15", "dates go out ISO, not 15/09/2026")
 
     def test_machine_owned_dates_are_written_as_real_dates(self):
@@ -1417,15 +1676,51 @@ class TestAppend(TmpDirCase):
 
         ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
         hdr = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
+        # `Notes` is deliberately NOT in this list: it is in HUMAN_COLS but the
+        # machine seeds it on row creation -- see the test below, which is the
+        # one that owns that rule.
         for col, want in [
-            ("Reviewer Notes", None),
             ("First Contact Date", None),
             ("Recall", None),
             ("Contact Name", None),
             ("Contact Email / LinkedIn", None),
-            ("Contact Search Status", "Not started"),
+            ("Contact Search Status", "New job found"),
         ]:
             self.assertEqual(ws.cell(3, hdr.index(col) + 1).value, want, f"{col} should be {want!r}")
+
+    def test_notes_is_seeded_on_creation_and_never_written_again(self):
+        """`Notes` is the one column the machine seeds and a colleague then owns.
+
+        The rule that replaced the old two-column split is that the machine writes
+        it ONLY when it creates the row. `append` never touches an existing cell,
+        so both halves are asserted here: a NEW row is seeded from the run's own
+        `Notes`, and an EXISTING row's note survives untouched. Losing the second
+        half is what fused machine text into a colleague's note in 2026-09-16,
+        and that is unrecoverable.
+        """
+        self.build(
+            [
+                {
+                    "Company / Outreach Account": "Esistente Srl",
+                    "Company ID": "polids-11111111",
+                    "Notes": "la collega ha già scritto qui: non contattare.",
+                    "Contact Search Status": "Contact found",
+                }
+            ]
+        )
+        self.stage_run([self.new_company("Nuova Srl")])
+        self.assertEqual(self.run_append().returncode, 0)
+        from openpyxl import load_workbook
+
+        ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
+        hdr = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
+        notes = hdr.index("Notes") + 1
+        self.assertEqual(
+            ws.cell(3, notes).value,
+            "la collega ha già scritto qui: non contattare.",
+            "an existing row's note belongs to the colleague; the machine must not touch it",
+        )
+        self.assertEqual(ws.cell(4, notes).value, "machine note", "a NEW row is seeded from the run")
 
     def test_a_new_company_gets_a_proposed_id(self):
         self.build([])
@@ -1444,7 +1739,7 @@ class TestAppend(TmpDirCase):
                 {
                     "Company / Outreach Account": "Esistente Srl",
                     "Company ID": "polids-11111111",
-                    "Reviewer Notes": "a colleague's note",
+                    "Notes": "a colleague's note",
                     "Contact Search Status": "Contact found",
                     "First Contact Date": datetime(2026, 3, 9),
                 }
@@ -1456,7 +1751,7 @@ class TestAppend(TmpDirCase):
 
         ws = load_workbook(self.tmp / "Review.xlsx")["Review"]
         hdr = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
-        self.assertEqual(ws.cell(3, hdr.index("Reviewer Notes") + 1).value, "a colleague's note")
+        self.assertEqual(ws.cell(3, hdr.index("Notes") + 1).value, "a colleague's note")
         self.assertEqual(ws.cell(3, hdr.index("Contact Search Status") + 1).value, "Contact found")
         d = ws.cell(3, hdr.index("First Contact Date") + 1).value
         self.assertEqual((d.year, d.month, d.day), (2026, 3, 9))
@@ -1536,8 +1831,19 @@ class TestHarvest(TmpDirCase):
         canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa", contacted="03/09/2026")])
         self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"First Contact Date": datetime(2026, 9, 3)})])
         out = json.loads(self.run_("harvest", canon).stdout)
-        self.assertEqual(out["conflicts"], 0, "the same date must not read as a conflict")
-        self.assertEqual(out["updates"], 0, "nothing changed, so nothing to write")
+        self.assertEqual(out["changes"], 0, "the same date is not a change")
+        self.assertEqual(out["change_detail"], [], "nothing to report, so no detail")
+
+    def test_a_datetime_string_in_the_history_is_not_a_conflict(self):
+        """`test_same_date_in_two_representations_is_not_a_conflict` hands harvest a
+        canonical in the format `same_value` documents. The real producer wrote a
+        different one: `export-history` stringified the cell's datetime, so every
+        date column came back as '2026-09-03 00:00:00' -- 76 of 77 conflicts on a
+        workbook compared against its own export."""
+        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa", contacted="2026-09-03 00:00:00")])
+        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"First Contact Date": datetime(2026, 9, 3)})])
+        out = json.loads(self.run_("harvest", canon).stdout)
+        self.assertEqual(out["changes"], 0, "the ISO datetime form is the same day")
 
     def test_harvest_never_writes(self):
         canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
@@ -1545,6 +1851,41 @@ class TestHarvest(TmpDirCase):
         self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Contact Search Status": "Contact found"})])
         self.run_("harvest", canon)
         self.assertEqual(canon.read_bytes(), before, "harvest is the audit path: read-only")
+
+    def test_a_notes_edit_is_now_a_reportable_decision(self):
+        """What merging the two notes columns bought.
+
+        `Reviewer Notes` used to be un-comparable: it existed only in Review.xlsx,
+        the export carried the machine half, so its value read empty on the
+        exported side and every row carrying a note reported as a change on every
+        run forever. `harvest` had to declare it blind instead of counting it.
+        `Notes` exists on BOTH sides now, so a colleague's edit is a real,
+        reportable decision -- and the blind list is empty."""
+        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
+        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Notes": "Non accetta più candidature"})])
+        out = json.loads(self.run_("harvest", canon).stdout)
+        self.assertEqual(out["not_compared"], [], "nothing is blind any more")
+        self.assertEqual(out["changes"], 1, "an edited note is a colleague decision")
+        self.assertEqual(out["change_detail"][0]["column"], "Notes")
+
+    def test_it_reports_a_colleague_decision_as_was_and_now(self):
+        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa", status="Not started")])
+        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {"Contact Search Status": "Contact found"})])
+        out = json.loads(self.run_("harvest", canon, "--verbose").stdout)
+        self.assertEqual(out["changes"], 1)
+        self.assertEqual(out["changed_companies"], 1)
+        change = out["change_detail"][0]
+        self.assertEqual(change["company"], "Alpha Srl")
+        self.assertEqual(change["column"], "Contact Search Status")
+        self.assertEqual(change["was"], "Not started")
+        self.assertEqual(change["now"], "Contact found")
+
+    def test_the_output_says_what_it_compared_against(self):
+        canon = self.make_canon([self.row("Alpha Srl", "polids-aaaaaaaa")])
+        self.build_review([("Alpha Srl", "polids-aaaaaaaa", {})])
+        out = json.loads(self.run_("harvest", canon).stdout)
+        self.assertEqual(out["compared_against"], str(canon))
+        self.assertEqual(out["review"], str(self.tmp / "Review.xlsx"))
 
     def test_shared_company_id_is_ambiguous_not_silently_first_wins(self):
         """The 5 duplicate names share a proposed id. Collapsing them to one row
@@ -1555,9 +1896,10 @@ class TestHarvest(TmpDirCase):
         )
         self.build_review([("KPMG", "polids-7187734f", {"Contact Search Status": "Contact found"})])
         out = json.loads(self.run_("harvest", canon).stdout)
-        self.assertEqual(out["updates"], 0, "must not pick one of the two rows")
-        kinds = [c for c in out["conflict_detail"] if c["canonical"] == "duplicate_id"]
-        self.assertEqual(len(kinds), 1)
+        self.assertEqual(out["changes"], 0, "must not pick one of the two rows")
+        reasons = [u["reason"] for u in out["unresolved_detail"]]
+        self.assertEqual(reasons, ["duplicate_id"])
+        self.assertEqual([u["company"] for u in out["unresolved_detail"]], ["KPMG"])
 
 
 class TestExportHistory(TmpDirCase):
@@ -1584,8 +1926,8 @@ class TestExportHistory(TmpDirCase):
         row["Matching Job Titles"] = "1. Service Design Intern — Milan, Italy"
         row["Job Links"] = "1. https://alpha.example/1"
         row["Locations"] = "Milan, Italy"
-        row["Matching Notes"] = "[NEW COMPANY] machine prose"
-        row["Reviewer Notes"] = "a colleague's note"
+        row["Matching Score"] = "1. 88"
+        row["Notes"] = "[NEW COMPANY] machine prose"
         row["Company ID"] = "polids-aaaaaaaa"
         row["Contact Search Status"] = "Contact found"
         for c, name in enumerate(REVIEW_COLUMNS, start=1):
@@ -1615,17 +1957,40 @@ class TestExportHistory(TmpDirCase):
         self.assertEqual(rec["Matching Job Titles"], "1. Service Design Intern — Milan, Italy")
         self.assertEqual(rec["Company ID"], "polids-aaaaaaaa")
 
-    def test_the_machine_notes_half_maps_to_a4_notes(self):
-        # Review splits A4's single `Notes` into `Matching Notes` (machine) and
-        # `Reviewer Notes` (human). The export has one A4 column to fill, and the
-        # machine half is what A4 means by Notes.
+    def test_a_date_cell_survives_the_round_trip(self):
+        """A writer and a reader disagreeing about one format is the bug class this
+        module exists to prevent, and export-history had it against its own reader:
+        the date cell came out as str(datetime), which parse_date returns None for.
+        `_sidecar_value` already states the intended format: date-only ISO."""
+        self.build_review()
+        from openpyxl import load_workbook
+
+        wb = load_workbook(self.tmp / "Review.xlsx")
+        wb["Review"].cell(3, REVIEW_COLUMNS.index("First Contact Date") + 1, datetime(2026, 9, 3))
+        wb.save(self.tmp / "Review.xlsx")
+
+        out = self.tmp / "h.csv"
+        self.assertEqual(self.export("--out", str(out)).returncode, 0)
+        rows = list(csv.reader(io.StringIO(out.read_text(encoding="utf-8")), delimiter=";"))
+        rec = dict(zip(rows[0], rows[1]))
+        self.assertEqual(rec["First Contact Date"], "2026-09-03")
+        self.assertIsNotNone(
+            parse_date(rec["First Contact Date"]), "the export must be readable by its own reader"
+        )
+
+    def test_notes_and_score_round_trip_under_their_own_names(self):
+        # Review and A4 call both columns the same thing now, so nothing is
+        # remapped on the way out. The map that used to do it
+        # (`REVIEW_TO_A4_COLUMN`) is asserted empty, because a silent rename is
+        # how a column ends up writing into the wrong A4 column.
         self.build_review()
         out = self.tmp / "h.csv"
         self.export("--out", str(out))
         rows = list(csv.reader(io.StringIO(out.read_text(encoding="utf-8")), delimiter=";"))
         rec = dict(zip(rows[0], rows[1]))
+        self.assertEqual(REVIEW_TO_A4_COLUMN, {}, "a rename must be declared, not assumed")
         self.assertEqual(rec["Notes"], "[NEW COMPANY] machine prose")
-        self.assertNotEqual(rec["Notes"], "a colleague's note", "the human half must not win")
+        self.assertEqual(rec["Matching Score"], "1. 88")
 
     def test_columns_review_does_not_render_come_out_empty_not_invented(self):
         self.build_review()
@@ -1658,10 +2023,11 @@ class TestExportHistory(TmpDirCase):
 class TestMigrateReview(TmpDirCase):
     """Rebuilding Review.xlsx onto a changed REVIEW_COLUMNS.
 
-    `stage` and `append` write into the sheet at POSITIONS taken from
-    REVIEW_COLUMNS, so changing that list without a migration puts every value
-    after the change into the wrong column -- and the tab-count era's lesson
-    applies here too: the file still looks fine.
+    `append` writes by looking each column up in the sheet's OWN row-2 header, so
+    a renamed or newly added column silently gets nothing written into it, while
+    a column that has left the schema keeps its values sitting in a sheet the
+    readers then refuse. The tab-count era's lesson applies here too: the file
+    still looks fine.
     """
 
     # The 24-column set that shipped before the vocabulary change.
@@ -1734,7 +2100,7 @@ class TestMigrateReview(TmpDirCase):
                     "Company / Outreach Account": "Alpha Srl",
                     "Contact Search Status": "Contacted",
                     "Contact Name": "Enrica Marro",
-                    "Matching Notes": "[NEW COMPANY] ...",
+                    "Matching Notes": "[NEW COMPANY] [pertinente] Match score: 88/100; nota",
                     "Previously Contacted?": "Yes",
                     "Outreach Decision": "Review",
                     "First Contact Date": datetime(2026, 9, 3),
@@ -1747,13 +2113,38 @@ class TestMigrateReview(TmpDirCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         out = json.loads(proc.stdout)
         self.assertEqual(out["rows"], 1)
-        self.assertEqual(out["columns_dropped"], ["Previously Contacted?", "Outreach Decision"])
+        # Three columns left the schema on 2026-09-23. `Brands / Business Units`
+        # is gone for good; the two notes columns are dropped only until
+        # `migrate-review` learns to carry their content into `Notes` /
+        # `Matching Score`, which is why this test names the loss instead of
+        # asserting the rebuilt sheet is empty (YUW-89).
+        self.assertEqual(
+            out["columns_dropped"],
+            [
+                "Brands / Business Units",
+                "Previously Contacted?",
+                "Outreach Decision",
+                "Matching Notes",
+                "Reviewer Notes",
+            ],
+        )
+        self.assertEqual(out["columns_added"], ["Matching Score", "Notes"])
 
         hdr, by = self.read_new()
         self.assertEqual(hdr, REVIEW_COLUMNS)
         row = by["Alpha Srl"]
         self.assertEqual(row["Contact Name"], "Enrica Marro", "a cell after the dropped columns must not shift")
-        self.assertEqual(row["Matching Notes"], "[NEW COMPANY] ...")
+        # The old machine prose is CONSUMED, not dropped: its inline score moves
+        # to `Matching Score` and the remainder becomes `Notes`. Before
+        # 2026-09-23 both columns arrived empty and the prose was listed under
+        # `columns_dropped` with nothing to show for it.
+        self.assertEqual(row["Matching Score"], "1. 88")
+        self.assertEqual(row["Notes"], "[NEW COMPANY] [pertinente] nota")
+        self.assertEqual(out["columns_consumed"]["Matching Notes"], "Matching Score + Notes")
+        self.assertEqual(out["notes_split"], 1)
+
+        hdr, by = self.read_new()
+        row = by["Alpha Srl"]
         self.assertEqual(row["Company ID"], "polids-aaaaaaaa")
         self.assertIsInstance(row["First Contact Date"], datetime, "real dates must survive as dates")
         # number_format lives on the CELL, not the value, so read it directly.
@@ -1763,6 +2154,175 @@ class TestMigrateReview(TmpDirCase):
         hdr = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
         cell = ws.cell(3, hdr.index("First Contact Date") + 1)
         self.assertEqual(cell.number_format, "DD/MM/YYYY")
+
+    def test_a_human_note_is_merged_not_overwritten(self):
+        """The one row in Strategic ED.28 that carries both halves.
+
+        A colleague's sentence is the only thing in this sheet that cannot be
+        regenerated, so the merge appends and marks. This is also the fusion the
+        2026-09-16 split existed to prevent -- done once, deliberately, with the
+        boundary still readable afterwards.
+        """
+        self.build_old_sheet(
+            [
+                {
+                    "Company / Outreach Account": "Alpha Srl",
+                    "Matching Notes": "[NEW COMPANY] [pertinente] Match score: 90/100; prosa macchina",
+                    "Reviewer Notes": "non accetta più candidature",
+                }
+            ]
+        )
+        out = json.loads(self.migrate().stdout)
+        self.assertEqual(out["notes_merged"], 1)
+        row = self.read_new()[1]["Alpha Srl"]
+        self.assertEqual(row["Matching Score"], "1. 90")
+        self.assertIn("prosa macchina", row["Notes"])
+        self.assertIn("non accetta più candidature", row["Notes"])
+        self.assertIn("nota della persona", row["Notes"], "the join must be marked, not fused")
+        assert row["Notes"].index("prosa macchina") < row["Notes"].index("non accetta")
+
+    def test_a_human_note_alone_survives_without_a_machine_half(self):
+        self.build_old_sheet(
+            [{"Company / Outreach Account": "Alpha Srl", "Reviewer Notes": "solo la nota della persona"}]
+        )
+        out = json.loads(self.migrate().stdout)
+        self.assertEqual(out["notes_merged"], 0, "nothing to merge when there is no machine half")
+        row = self.read_new()[1]["Alpha Srl"]
+        self.assertEqual(row["Notes"], "solo la nota della persona")
+        self.assertIn(row["Matching Score"], (None, ""))
+
+    def test_reinterpret_moves_a_value_that_is_still_in_the_vocabulary(self):
+        """`Not started` changed meaning on 2026-09-23 without changing name.
+
+        `LEGACY_CONTACT_STATUS` cannot express that: the census skips any value
+        already in the vocabulary, so a live value never reaches the translation
+        branch. Hence an explicit flag, and hence this test.
+        """
+        self.build_old_sheet(
+            [
+                {"Company / Outreach Account": "A", "Contact Search Status": "Not started"},
+                {"Company / Outreach Account": "B", "Contact Search Status": "No suitable contact"},
+            ]
+        )
+        out = json.loads(self.migrate("--reinterpret", "Not started=New job found").stdout)
+        self.assertEqual(out["status_reinterpreted"], {"Not started": 1})
+        self.assertEqual(out["status_translated"], {"No suitable contact": 1}, "legacy still translates")
+        by = self.read_new()[1]
+        self.assertEqual(by["A"]["Contact Search Status"], "New job found")
+        self.assertEqual(by["B"]["Contact Search Status"], "Job not suitable")
+
+    def test_without_the_flag_a_live_value_is_left_alone(self):
+        """The safe default. Re-reading a colleague-editable column is a decision
+        somebody makes on the command line, not one this tool makes for them."""
+        self.build_old_sheet([{"Company / Outreach Account": "A", "Contact Search Status": "Not started"}])
+        out = json.loads(self.migrate().stdout)
+        self.assertEqual(out["status_reinterpreted"], {})
+        self.assertEqual(self.read_new()[1]["A"]["Contact Search Status"], "Not started")
+
+    def test_reinterpret_refuses_a_target_outside_the_vocabulary(self):
+        self.build_old_sheet([{"Company / Outreach Account": "A", "Contact Search Status": "Not started"}])
+        before = (self.tmp / "Review.xlsx").read_bytes()
+        proc = self.migrate("--reinterpret", "Not started=Chiamato forse")
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("not in the vocabulary", proc.stdout)
+        self.assertEqual((self.tmp / "Review.xlsx").read_bytes(), before, "a refusal writes nothing")
+
+    def test_export_dropped_writes_the_values_before_the_rebuild(self):
+        """A dropped column's values otherwise survive ONLY inside
+        `_machine/backups`, and `write_atomically` replaces the file -- so they
+        have to be read out before the rebuild, not after."""
+        self.build_old_sheet(
+            [
+                {
+                    "Company / Outreach Account": "Alpha Srl",
+                    "Brands / Business Units": "Alpha\nAlpha Italia",
+                    "Matching Notes": "[NEW COMPANY] prosa",
+                }
+            ]
+        )
+        drop_dir = self.tmp / "dropped"
+        out = json.loads(self.migrate("--export-dropped", str(drop_dir)).stdout)
+        exported = out["exported_dropped"]
+        self.assertEqual(exported["rows"], 1)
+        self.assertIn("Brands / Business Units", exported["columns"])
+        rows = list(csv.DictReader(io.StringIO(Path(exported["file"]).read_text(encoding="utf-8")), delimiter=";"))
+        self.assertEqual(rows[0]["Company / Outreach Account"], "Alpha Srl")
+        self.assertEqual(rows[0]["Brands / Business Units"], "Alpha\nAlpha Italia")
+        # And the rebuilt sheet no longer has the column, which is why this exists.
+        self.assertNotIn("Brands / Business Units", self.read_new()[0])
+
+    def test_dry_run_reports_the_export_without_writing_it(self):
+        self.build_old_sheet([{"Company / Outreach Account": "A", "Brands / Business Units": "A"}])
+        drop_dir = self.tmp / "dropped"
+        out = json.loads(self.migrate("--export-dropped", str(drop_dir), "--dry-run").stdout)
+        self.assertEqual(out["would_export"]["dir"], str(drop_dir))
+        self.assertNotIn("exported_dropped", out)
+        self.assertFalse(drop_dir.exists(), "a dry run that leaves a file behind is not a dry run")
+
+    def test_refuses_while_excel_has_the_file_open(self):
+        """`migrate-review` rewrites the WHOLE sheet, so an open Excel is worse
+        here than it is for `append`: `append` defers to a sidecar and costs one
+        paste, while a half-written migration costs the record.
+
+        The guard belongs to `synced_fs.write_atomically`, not to this command --
+        asserted anyway, so that a future rewrite of the apply path cannot
+        quietly route around it. Measured on the real folders: one colleague
+        editing Accessory ED.14 changed it under a migration's feet on
+        2026-09-23, which is exactly the case this refuses.
+        """
+        self.build_old_sheet([{"Company / Outreach Account": "A"}])
+        before = (self.tmp / "Review.xlsx").read_bytes()
+        (self.tmp / "~$Review.xlsx").write_bytes(b"lock")
+        proc = self.migrate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["reason"], "excel_lock")
+        self.assertEqual((self.tmp / "Review.xlsx").read_bytes(), before, "a refusal writes nothing")
+
+    def test_to_writes_a_second_file_and_leaves_the_first_alone(self):
+        """The cutover shape: rebuild under a second name while the live file is
+        still in somebody's hands.
+
+        `--from` and `--to` are independent, which is why the source must NOT
+        default to the target: `--to Review-v2.xlsx` on its own has to read
+        `Review.xlsx`, or it would look for a file that does not exist yet.
+        """
+        self.build_old_sheet(
+            [
+                {
+                    "Company / Outreach Account": "Alpha Srl",
+                    "Matching Notes": "[NEW COMPANY] [pertinente] Match score: 70/100; prosa",
+                }
+            ]
+        )
+        before = (self.tmp / "Review.xlsx").read_bytes()
+        proc = self.migrate("--to", "Review-v2.xlsx")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue(json.loads(proc.stdout)["target"].endswith("Review-v2.xlsx"))
+
+        self.assertEqual((self.tmp / "Review.xlsx").read_bytes(), before, "the live file must not be touched")
+        self.assertTrue((self.tmp / "Review-v2.xlsx").exists(), "and the rebuilt one must exist")
+
+        from openpyxl import load_workbook
+
+        ws = load_workbook(self.tmp / "Review-v2.xlsx")["Review"]
+        hdr = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
+        self.assertEqual(hdr, REVIEW_COLUMNS, "the second file is on the current schema")
+        row = {h: ws.cell(3, c + 1).value for c, h in enumerate(hdr) if h}
+        self.assertEqual(row["Matching Score"], "1. 70")
+        self.assertEqual(row["Notes"], "[NEW COMPANY] [pertinente] prosa")
+
+    def test_to_refuses_a_path(self):
+        """A second NAME is a cutover step; a second RECORD is the drift that let
+        the old canonical CSV fall 62 companies behind. So the new sheet has to
+        land in the folder the other commands read -- a path here would let a
+        typo put it where nothing looks, which fails the same way and looks
+        tidier while doing it.
+        """
+        self.build_old_sheet([{"Company / Outreach Account": "A"}])
+        proc = self.migrate("--to", "sub/Review-v2.xlsx")
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("filename, not a path", proc.stdout)
+        self.assertFalse((self.tmp / "sub").exists())
 
     def test_translates_the_old_status_vocabulary(self):
         self.build_old_sheet(
@@ -1774,10 +2334,13 @@ class TestMigrateReview(TmpDirCase):
             ]
         )
         out = json.loads(self.migrate().stdout)
-        self.assertEqual(out["status_translated"], {"Contacted": 1, "No suitable contact": 1})
+        self.assertEqual(out["status_translated"], {"No suitable contact": 1})
         self.assertEqual(out["unmapped_status"], {})
         by = self.read_new()[1]
-        self.assertEqual(by["A"]["Contact Search Status"], "Contact found")
+        # `Contacted` stopped being superseded on 2026-09-23: it is a live value
+        # now, and translating it down to `Contact found` would silently demote a
+        # row a colleague had progressed. It is deliberately the first case here.
+        self.assertEqual(by["A"]["Contact Search Status"], "Contacted")
         self.assertEqual(by["B"]["Contact Search Status"], "Job not suitable")
         self.assertEqual(by["C"]["Contact Search Status"], "Not started")
 
@@ -1800,15 +2363,15 @@ class TestMigrateReview(TmpDirCase):
         self.assertEqual(self.read_new()[1]["A"]["Contact Search Status"], "chiamato forse")
 
     def test_dry_run_reports_the_plan_and_writes_nothing(self):
-        self.build_old_sheet([{"Company / Outreach Account": "A", "Contact Search Status": "Contacted"}])
+        self.build_old_sheet([{"Company / Outreach Account": "A", "Contact Search Status": "No suitable contact"}])
         before = (self.tmp / "Review.xlsx").read_bytes()
         out = json.loads(self.migrate("--dry-run").stdout)
         self.assertTrue(out["dry_run"])
-        self.assertEqual(out["status_translated"], {"Contacted": 1})
+        self.assertEqual(out["status_translated"], {"No suitable contact": 1})
         self.assertEqual((self.tmp / "Review.xlsx").read_bytes(), before)
 
     def test_takes_a_backup_and_leaves_colour_rules_installed(self):
-        self.build_old_sheet([{"Company / Outreach Account": "A", "Contact Search Status": "Contacted"}])
+        self.build_old_sheet([{"Company / Outreach Account": "A", "Contact Search Status": "No suitable contact"}])
         self.assertEqual(self.migrate().returncode, 0)
         self.assertTrue(list((self.tmp / "_machine" / "backups").glob("Review-*.xlsx")), "pre-write backup")
 

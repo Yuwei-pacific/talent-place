@@ -33,6 +33,10 @@ from pathlib import Path
 
 MULTI_VALUE_SPEC: dict[str, dict[str, bool]] = {
     "Matching Job Titles": {"semicolon": False, "numbered": True},
+    # Same shape and indexing as the two around it: the N-th score belongs to the
+    # N-th role. That shared index is the whole reason it is written
+    # `1. 92 | 2. 78` rather than as a bare number.
+    "Matching Score": {"semicolon": False, "numbered": True},
     # alt_marker: seen once in the canonical CSV (Cefriel), where a primary
     # employer URL and its LinkedIn mirror share one line. That alternate is a
     # real dedup target, so it splits out rather than riding inside the primary.
@@ -45,7 +49,11 @@ MULTI_VALUE_SPEC: dict[str, dict[str, bool]] = {
 }
 
 # Columns that are free text and must never be split.
-FREE_TEXT_COLS = {"Notes", "Curricular Evidence", "Reviewer Notes", "Matching Notes"}
+#
+# `Matching Score` is deliberately NOT here: it is a numbered list, so it carries
+# a MULTI_VALUE_SPEC entry like its siblings. The two sets are mutually exclusive
+# by construction -- `split_column` raises for a FREE_TEXT_COLS member.
+FREE_TEXT_COLS = {"Notes", "Curricular Evidence"}
 
 _NUMBERED_SPLIT = re.compile(r"(?:^|\n|\|)\s*(\d+)\.\s+")
 _ALT_SPLIT = re.compile(r"(?:^|\s)alt\.\s+", re.IGNORECASE)
@@ -159,7 +167,12 @@ HUMAN_COLS = [
     "Contact Role",
     "Contact Email / LinkedIn",
     "Outreach Decision",
-    "Reviewer Notes",
+    # `Notes` is the one column that is BOTH. A colleague owns its content once
+    # the row exists -- that is why it is declared human -- but the machine SEEDS
+    # it when it creates the row, from the run's own `Notes`, and never writes it
+    # again. The rule lives in `sync_export._new_company_values`; declaring the
+    # column human is what keeps every other writer away from it.
+    "Notes",
     "First Contact Date",
     "Recall",
 ]
@@ -177,9 +190,13 @@ MACHINE_UNION_COLS = [
 # Machine-owned, latest value wins.
 MACHINE_LATEST_COLS = ["Verification Status", "Last Checked"]
 
-# Machine-authored prose. Split out of the legacy single `Notes` column so
-# machine text and colleague notes can never fuse irreversibly.
-MACHINE_TEXT_COLS = ["Matching Notes"]
+# Machine-derived values a colleague does not type. `Matching Score` is a
+# positional list rather than prose, but it shares this set's character: the
+# machine derives it from a read and nobody edits it by hand.
+#
+# It replaced `Matching Notes` on 2026-09-23, when the machine half of the notes
+# split became a score-only column and the prose went into `Notes`.
+MACHINE_TEXT_COLS = ["Matching Score"]
 
 # Columns holding dates. Written as real datetime values, never as text: a
 # conditional-formatting formula like `$W2<=TODAY()` compares STRINGS against
@@ -205,10 +222,22 @@ DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%d/%m/%y")
 
 def parse_date(value: str | None) -> date | None:
     """Parse a canonical-CSV date, or None. Day-first is explicit in the format
-    list, so there is no ambiguity to resolve heuristically."""
+    list, so there is no ambiguity to resolve heuristically.
+
+    A trailing time component is discarded. `export-history` stringified a date
+    cell as `str(datetime)`, which yields '2026-09-03 00:00:00' — a form this
+    function returned None for, so every date in the exported CSV compared as a
+    change. Tolerating it here reads files already on disk; the writer is fixed
+    separately so new exports do not produce it.
+
+    DATE_FORMATS deliberately stays the list of formats a value may be WRITTEN
+    in — `detect_date_format` answers "which convention does this cell use", and
+    a datetime is not one of the conventions.
+    """
     s = (value or "").strip()
     if not s:
         return None
+    s = re.split(r"[ T]\d{1,2}:\d{2}", s, maxsplit=1)[0]
     for fmt in DATE_FORMATS:
         try:
             return datetime.strptime(s, fmt).date()
@@ -351,23 +380,56 @@ def find_duplicate_names(canon: Canonical) -> dict[str, list[CanonicalRow]]:
     Deliberately no count and no names here. Both change — one pair was resolved
     while this docstring still said "5" — and a number in a docstring is one more
     thing that has to stay true. Linear tracks which ones are outstanding.
+
+    NOT on an execution path: the test suite is its only caller. Ambiguity is
+    detected where it matters, by `match_company`, which returns `ambiguous` for
+    a name that sits on two rows. This function is the description of that state
+    written as something checkable, not a step any command runs.
     """
     return {k: v for k, v in canon.by_norm_name.items() if len(v) > 1}
 
 
-def load_aliases(path: str | Path | None) -> dict[str, str]:
-    """Human-maintained alias table: alias_norm;canonical_id;note."""
+@dataclass
+class AliasTable:
+    """The alias table, plus what it took to read it.
+
+    One reader, one read: the mapping and the note about the file come from the
+    same pass, so a report of the alias table can never disagree with the aliases
+    actually in force.
+    """
+
+    mapping: dict[str, str] = field(default_factory=dict)
+    path: str = ""
+    note: str = ""
+
+    def report(self) -> dict:
+        out: dict = {"file": self.path, "loaded": len(self.mapping)}
+        if self.note:
+            out["note"] = self.note
+        return out
+
+
+def load_aliases(path: str | Path | None) -> AliasTable:
+    """Human-maintained alias table: alias_norm;canonical_id;note.
+
+    A missing or header-only file is REPORTED, never returned as an indistinguishable
+    "no aliases needed". Rung 3 of the matching ladder is inert either way, so
+    silence here hid the human escape hatch from an ambiguous name in exactly the
+    case where someone needs to know it is not working.
+    """
     if not path:
-        return {}
+        return AliasTable(note="no alias table path configured")
     p = Path(path)
     if not p.exists():
-        return {}
+        return AliasTable(path=str(p), note="file not found: rung 3 cannot fire")
     out: dict[str, str] = {}
     rows = list(csv.reader(io.StringIO(p.read_text(encoding="utf-8-sig")), delimiter=";"))
     for r in rows[1:]:
         if len(r) >= 2 and r[0].strip() and r[1].strip():
             out[r[0].strip()] = r[1].strip()
-    return out
+    if not out:
+        return AliasTable(path=str(p), note="file holds no aliases: rung 3 cannot fire")
+    return AliasTable(mapping=out, path=str(p))
 
 
 # --------------------------------------------------------------------------

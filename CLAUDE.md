@@ -22,7 +22,7 @@ Search output used to be pasted into SharePoint by hand. It no longer is. Owners
 | `Review.xlsx` | **colleagues** | reads freely; **appends new company rows only**, behind guards. Never regenerated. |
 | `Roles.xlsx` | **machine** | regenerated wholesale every run: sheet `Roles` (one row per role) + `Company Summary` (one row per company, with the human columns copied in read-only) |
 | `_machine/*.csv` | machine | plain-text diffable copies, no openpyxl |
-| `_machine/backups/` | machine | pre-write copies of `Review.xlsx` and the canonical CSV |
+| `_machine/backups/` | machine | pre-write copies of `Review.xlsx` |
 | `Review-additions-<run>.csv` | machine | written **instead of** touching `Review.xlsx` when a guard refuses |
 
 `Roles.xlsx` is **not** a review queue anyone merges — it is a rendering. That distinction matters: a machine file a human must merge back is just the paste step relocated.
@@ -36,7 +36,7 @@ doctor         verify the target dir (sync mount? dataless? Excel lock?)
 export-history Review.xlsx -> the CSV a run dedups against   (read-only)
 stage          TSV -> Roles.xlsx + _machine/*.csv   (never touches Review.xlsx)
 append         add genuinely-new companies to Review.xlsx
-harvest        report what colleagues decided        (read-only audit)
+harvest        what colleagues decided since the previous export   (read-only audit)
 ```
 
 `init-review` (create `Review.xlsx`), `color` (install the status rules) and `migrate-review` (rebuild a workbook onto a changed `REVIEW_COLUMNS`) are one-time or as-needed. `export-history` is read-only and runs before every search.
@@ -110,7 +110,7 @@ python3 python/sync_export.py stage --dir "<Master>" --history <run dir>/history
     --tsv <run dir>/run.tsv --evidence <run dir>/role-evidence.csv
 ```
 
-Without `--evidence` those columns stay empty and the manifest lists them under `columns_without_source`; with it, that list is empty. Freshness in particular — A1 requires `verificare l'attualità`, and before this the posted date was dropped between the card stage and the report.
+Without `--evidence` those columns stay empty and the manifest lists them under `columns_without_source`. That list, and the per-column `filled / total` counts beside it in `evidence_join`, are derived from the rows rather than from whether the flag was passed — because the join key is the URL, and a run that followed A1 and wrote the employer URL into the TSV joins on nothing while the sidecar holds the portal URL. Reporting the flag made that run's manifest declare nothing missing while all three columns sat empty. Freshness in particular — A1 requires `verificare l'attualità`, and before this the posted date was dropped between the card stage and the report.
 
 Before `src/cli.ts` existed, the adapters, `geoFilter`, `dedupCards`, `prefilter` and `observe` were all an uncalled library and the run loop lived in a throwaway script — so nothing about a run was reproducible. **If you find yourself writing a `/tmp` script to drive the adapters, that script belongs in `src/` instead.**
 
@@ -162,15 +162,28 @@ These are A1/A4 rules expressed as code. Changing one means changing a rule, so 
 - **Column identity vs. date-ness are different axes.** `DATE_COLUMNS` spans both owners — `Last Checked` is machine-owned while `First Contact Date`/`Recall` are human-owned. Blanking every date column when appending silently drops the run date.
 - **An id shared by two rows is ambiguous.** Where a name sits on two rows, both carry the same proposed `Company ID`. Resolving by id would send every update to the first row and strand the second — the same failure as `add_verified.py`'s old last-row-wins, via a different key. (The count of such names is deliberately not written here; it changes, and a number in prose is one more thing to keep true. Linear tracks it.)
 - **Never bypass login/CAPTCHA/rate limits.** `discovery/http.ts` classifies those as `blocked` and the ladder moves to another source. `BLOCKED_MARKERS` is deliberately narrow — `captcha` and `enable javascript to` appear on *legitimate* Ashby/Workday pages, so widening the list silently kills the whole employer branch.
-- **Indeed accounting invariant:** `X = Y + Z + P` (unique found / included / excluded-or-duplicate / unresolved-outside-TSV), rendered by `observe.ts::indeedLine`.
+- **Indeed accounting invariant:** `X = Y + Z + P` (unique found / included / excluded-or-duplicate / unresolved-outside-TSV), enforced by `observe.ts::indeedLine`. That function is a generator, and `cli.js indeed --status … --x … --y … --z … [--p …]` is its caller: the run computes the line instead of composing it, so the arithmetic is checked where the line is produced. Before that subcommand existed the invariant was implemented and never ran, so a mandatory A4 rule was unenforced.
 - **Employer page beats portal page** for verification status (A1). A generic Careers page is never proof a specific role exists and is not a dedup key.
-- **`Contact Search Status` is a closed set of five**, and it is the axis `Review.xlsx` colours the whole row by. `stage` refuses the entire run on a value outside it, so `CONTACT_STATUS_VALUES` and A4 must move together — that is not a stylistic preference, it is a hard failure. Superseded values go in `LEGACY_CONTACT_STATUS` so `migrate-review` can carry a live sheet across rather than a human retyping it.
+- **`Contact Search Status` is a closed set of seven**, and it is the axis `Review.xlsx` colours the whole row by. `stage` refuses the entire run on a value outside it, so the vocabulary and A4 must move together — that is not a stylistic preference, it is a hard failure. The order lives in **one** place, `CONTACT_STATUS_ORDER` (a tuple); the membership set, the dropdown and the red-fallback exclusions are all derived from it. That matters because a value with no colour rule of its own renders white — indistinguishable from the machine's default, which is the whole reason the list is closed. Superseded values go in `LEGACY_CONTACT_STATUS` so `migrate-review` can carry a live sheet across rather than a human retyping it — but a value **still in the vocabulary** cannot go there, because the census skips anything already in the set, so re-interpreting one is the explicit `migrate-review --reinterpret` flag.
+- **`Notes` is machine-seeded and colleague-owned** — the only column that is both. The machine writes it *only* when it creates the row and never again; `append` never touches an existing cell, so the rule holds, but it holds by virtue of the command set rather than by construction. It replaces the 2026-09-16 split into `Matching Notes` + `Reviewer Notes`, which existed because the two sides once fused irreversibly.
 
 ## Pipeline order (in the engine)
 
 `Card` (a discovery hit) → `geoFilter` → `dedupCards` → `prefilter` → detail fetch/verify → `Role`. Dedup runs **before** prefilter so that duplicates from the (query × location) fan-out don't consume `topK` slots or detail budget.
 
-Discovery adapters live in `src/discovery/`, each returning `Card[]` behind the `SourceAdapter` interface: LinkedIn public guest API, employer ATS JSON APIs (Greenhouse/Lever/Ashby/Workable), Ashby job boards, CercoLavoro public SERP, and a generic employer-page check. Indeed direct HTTP is 403 from datacenter clients, so Indeed stays a runtime-declared source (public web + employer verification) unless a connector is provided.
+`src/discovery/` holds three `SourceAdapter`s and two plain helpers, and the distinction matters — `defaultAdapters` is what decides which of them a run actually reaches:
+
+| Export | Kind | Reachable? |
+|---|---|---|
+| `linkedinGuestAdapter` | `SourceAdapter` | **yes**, by default |
+| `atsAdapter(boards)` | `SourceAdapter` | **yes**, when the run config lists `atsBoards`; kinds `greenhouse` and `lever` only, and an unlisted kind is refused at construction |
+| `cercoLavoroAdapter` | `SourceAdapter` | **no**, deliberately — see the `run.ts` docstring for the measured reason |
+| `employer.ts::ashbyBoard` | plain function | used by the employer probe, not an adapter |
+| `employer.ts::checkEmployerPage` | plain function | used by `verify` |
+
+Until 2026-09-22 this paragraph listed six adapters as live while `defaultAdapters` returned one: `atsAdapter` had no caller, its docstring promised a "tokens" argument its signature could not accept, and `DEFAULT_RATES.ats` budgeted a rate for a source that never ran. Read that table, not the intention.
+
+Indeed direct HTTP is 403 from datacenter clients, so Indeed stays a runtime-declared source (public web + employer verification) unless a connector is provided.
 
 ## Gotchas
 
@@ -193,10 +206,10 @@ Discovery adapters live in `src/discovery/`, each returning `Card[]` behind the 
 | Cohort constraints, `history_file` | `config/<Master> ED.NN>/A3-cohort.yaml` |
 | A new discovery source | `src/discovery/` + add to `tsconfig` `include` + a `test/*-smoke.mjs` appended to the `package.json` chain |
 | Where a run reads its history | `sync_export.py` → `cmd_export_history`; the run passes the CSV to `discover --history`. `A3.history_file` names the workbook it comes from. |
-| The review columns colleagues see | `sync_export.py` → `REVIEW_COLUMNS`, **then `migrate-review`**. Nothing writes by position: `append` reads the sheet's own row-2 header and writes by name, and `migrate-review` carries cells by column name. The migration is needed because the readers refuse a header that does not match `REVIEW_COLUMNS` — and before they refused, a missing column read as empty rather than failing, which is how a company gets appended with its name in no column at all. |
-| The colleague-facing status vocabulary | `CONTACT_STATUS_VALUES` in `sync_export.py` **and** A4 — `stage` refuses every row until the two agree. Old values go in `LEGACY_CONTACT_STATUS` so `migrate-review` can carry a live sheet across. |
+| The review columns colleagues see | `sync_export.py` → `REVIEW_COLUMNS`, **then `migrate-review`**. Nothing writes by position: `append` reads the sheet's own row-2 header and writes by name, and `migrate-review` carries cells by column name. The migration is needed because a renamed or added column gets no value written into it at all, the readers refuse a header missing any `REVIEW_COLUMNS` entry, and before they refused, a missing column read as empty rather than failing. **The same edit usually touches `A4_COLUMNS` and `ROLE_COLUMNS` too** — `A4_COLUMNS` is the agent's TSV contract, and it is mirrored by a literal header in A4 §71, by two fixture TSVs and by `parse_tsv`'s width check, none of which is derived from the constant. |
+| The colleague-facing status vocabulary | `CONTACT_STATUS_ORDER` in `sync_export.py` (the ordered tuple; `CONTACT_STATUS_VALUES` is derived from it) **and** A4 — `stage` refuses every row until the two agree. Superseded values go in `LEGACY_CONTACT_STATUS`; a value that is still live in the vocabulary cannot, so re-interpreting one is `migrate-review --reinterpret`. |
 | The status colours | `sync_export.py` → `_install_color_rules`, then re-run `color` (idempotent) |
-| The status vocabulary itself | `config/A4-regole-registrazione.md`, sezione «Contatti e decisioni» — that is the authority. The proposal that preceded it is **closed** and lives in `archive/2026-09-16-status-vocabulary-proposal.md`: its Modifica 1 was already in force, and its Modifica 2 (a status *derived* in Excel) was superseded by the stored 5-value vocabulary. Read it for the reasoning behind rejected alternatives, not for rules. |
+| The status vocabulary itself | `config/A4-regole-registrazione.md`, sezione «Contatti e decisioni» — that is the authority. The proposal that preceded it is **closed** and lives in `archive/2026-09-16-status-vocabulary-proposal.md`: its Modifica 1 was already in force, and its Modifica 2 (a status *derived* in Excel) was superseded by the stored vocabulary, which held five values at the time and seven from 2026-09-23. Read it for the reasoning behind rejected alternatives, not for rules. |
 
 Do not add a new config file per search run (A4) and do not create a second copy of A2/A3 content elsewhere.
 

@@ -95,7 +95,7 @@ Non si incolla più niente in SharePoint: `sync_export.py` scrive direttamente n
    ```
 3. `init-review` crea `Review.xlsx` (una volta; poi rifiuta di sovrascrivere) e `color` installa le regole di colore. `migrate-review` serve solo quando cambiano le **colonne**. `export-history` è di sola lettura e gira prima di ogni ricerca.
 
-**Se cambiano le colonne di `Review.xlsx`** (non i valori: le colonne), serve una migrazione, perché `stage` e `append` scrivono nella posizione dettata da `REVIEW_COLUMNS`: senza migrazione ogni valore dopo la modifica finisce nella colonna sbagliata.
+**Se cambiano le colonne di `Review.xlsx`** (non i valori: le colonne), serve una migrazione. `append` scrive usando l'intestazione della riga 2 del foglio: una colonna **rinominata o nuova** non riceve niente (la ricerca per nome non trova nulla), una vecchia resta lì coi suoi valori, e i lettori rifiutano un foglio a cui manca una qualunque colonna di `REVIEW_COLUMNS`. Prima che rifiutassero, una colonna mancante si leggeva come vuota — ed è così che un'azienda finiva appesa senza il nome in nessuna colonna.
 
 ```
 python3 engine/python/sync_export.py migrate-review --dir "<percorso>" --dry-run
@@ -146,12 +146,24 @@ Ogni cella viene trasferita **per nome di colonna**, quindi una colonna spostata
    decisioni dei colleghi restano dove le scrivono. `export-history` del punto 1 le
    rilegge al giro successivo.
 
-   Per un controllo di sola lettura su dove Review e il canonical di allora
-   divergevano (utile durante la transizione):
+   Per sapere **cosa hanno deciso i colleghi** dall'ultimo giro — di sola lettura,
+   confrontando `Review.xlsx` con l'export che quel giro aveva prodotto:
    ```
    python3 engine/python/sync_export.py harvest --dir "<percorso>" \
        --history <cartella del giro>/history.csv
    ```
+
+   Ogni differenza è una decisione di qualcuno, riportata come `was` → `now`. Due
+   file sono lo stesso registro in due momenti: non c'è niente da riconciliare, e
+   una differenza non è un conflitto.
+
+   Da quando i due mezzi di `Notes` sono tornati una colonna sola (23.09.2026) il
+   confronto **non ha più colonne cieche**: una nota scritta da una persona è una
+   decisione riportata come tutte le altre. Prima `Reviewer Notes` esisteva solo
+   qui e l'export non la portava, quindi ogni riga annotata risultava modificata a
+   ogni giro; il report la nominava in `not_compared` invece di contarla.
+   `not_compared` resta nel report — se un giorno una colonna diventa di nuovo
+   invisibile al confronto, deve dirlo invece di ignorarla in silenzio.
 
 **Due file, due proprietari.** `Review.xlsx` è dei colleghi: la macchina ci aggiunge solo righe nuove in fondo, dietro guardie, e non lo rigenera mai. `Roles.xlsx` è della macchina: si rigenera ogni giro e contiene una riga per ruolo. Nessuno deve unire niente a mano.
 
