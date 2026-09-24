@@ -8,7 +8,7 @@
 // "Da escludere in ammissibilità: 100% télétravail ... e annuncio scaduto".
 // A rule that lives in the driver dies with the driver. This is its home.
 //
-// A1 §47 governs the whole shape: an UNDECLARED field never excludes. Work mode,
+// A1 §46 governs the whole shape: an UNDECLARED field never excludes. Work mode,
 // language and curricular fit that the ad does not state keep the uncertainty,
 // and the role stays in the pool to be assessed with its doubts visible. Only a
 // declaration can exclude, which is why almost every input below is optional.
@@ -44,12 +44,36 @@ export type Admissibility =
  * invisible to a matcher that only knows "remote". Matching free text would need
  * a marker list that rots — and CLAUDE.md records what a widened marker list did
  * to `BLOCKED_MARKERS`. A run that cannot tell declaration from guesswork writes
- * `to_verify`, which is A1 §47's answer and excludes nothing.
+ * `to_verify`, which is A1 §46's answer and excludes nothing.
  */
 export const WORK_MODES: readonly WorkMode[] = ['onsite', 'hybrid', 'fully_remote', 'to_verify'];
 
 export function isWorkMode(value: string): value is WorkMode {
   return (WORK_MODES as readonly string[]).includes(value);
+}
+
+/**
+ * Map a SOURCE's own spelling onto the canonical set.
+ *
+ * Two APIs declare this and neither uses our casing: Lever sends
+ * `onsite|hybrid|remote`, Ashby sends `OnSite|Hybrid|Remote` and sometimes
+ * `null`. So the comparison folds case and separators, and the result is a
+ * member of `WORK_MODES` or `undefined`.
+ *
+ * `undefined` means NOT DECLARED, which A1 §46 keeps uncertain — never "not
+ * remote". An unrecognised spelling must not fall back to `onsite`, because that
+ * is the opposite error and, unlike a missed exclusion, nothing would report it.
+ * Within these vocabularies `remote` is one of three mutually exclusive
+ * categories, so it is the fully-remote one; that is why the mapping is safe
+ * here and a `location.name` substring test is not.
+ */
+export function workModeFrom(value: unknown): WorkMode | undefined {
+  if (typeof value !== 'string') return undefined;
+  const k = value.trim().toLowerCase().replace(/[\s_-]/g, '');
+  if (k === 'onsite') return 'onsite';
+  if (k === 'hybrid') return 'hybrid';
+  if (k === 'remote' || k === 'fullyremote') return 'fully_remote';
+  return undefined;
 }
 
 /** A1 §44: internship vocabulary. Also the escape hatch in `senior-without-stage`
@@ -95,7 +119,7 @@ export interface AdmissibilityFields {
   snippet?: string;
   workMode?: string;
   /** `false` is a declaration that the ad is closed; absent is not a declaration
-   *  of anything (A1 §47). */
+   *  of anything (A1 §46). */
   applicationOpen?: boolean;
   /** Only the languages the ad MANDATES. A1: "Una terza lingua solo preferita
    *  non impone l'esclusione." */
@@ -126,7 +150,7 @@ export function admissibilityVerdict(f: AdmissibilityFields): Admissibility {
     };
   }
 
-  // "lavoro interamente da remoto" — only a declaration can fire this. A1 §47
+  // "lavoro interamente da remoto" — only a declaration can fire this. A1 §46
   // keeps the uncertainty for `to_verify`, and `hybrid` is admissible.
   if (f.workMode === 'fully_remote') {
     return { verdict: 'escluso', ground: 'fully-remote', detail: 'modalità dichiarata: interamente da remoto' };

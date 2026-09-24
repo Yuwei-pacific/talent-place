@@ -11,7 +11,7 @@
 // between requests were all invented in the moment and discarded with the file.
 import type { Card, SourceAdapter } from './types.js';
 import type { ScoredCard } from './prefilter.js';
-import type { AtsBoard } from './discovery/ats.js';
+import { WORK_MODE_DECLARABLE, type AtsBoard } from './discovery/ats.js';
 import { geoFilter } from './geo.js';
 import { dedupCards } from './dedup-cards.js';
 import { prefilter } from './prefilter.js';
@@ -36,7 +36,7 @@ export interface PipelineConfig {
   atsBoards?: AtsBoard[];
   /** Cards kept after scoring. The rest stay in `dropped`, never discarded. */
   topK: number;
-  /** The languages A3 admits. Absent means undeclared, and A1 §47 then excludes
+  /** The languages A3 admits. Absent means undeclared, and A1 §46 then excludes
    *  nothing on language — that ground needs both sides to say something. */
   admittedLanguages?: string[];
   /** Known boards and agencies. Absent reads `engine/data/aggregators.csv`. */
@@ -87,6 +87,12 @@ export interface PipelineResult {
   /** Where the aggregator table came from, and whether it was there at all.
    *  "missing" and "empty" are different answers. */
   aggregatorTable: { source: string; missing: boolean };
+  /** Board kinds on this run whose API cannot declare a work mode, so A1 §44's
+   *  `fully-remote` ground cannot fire against them at this stage and is left to
+   *  `admit`. Derived from the boards actually configured, so it cannot claim a
+   *  coverage the run does not have — and reported at all because "which grounds
+   *  are live on this run" is invisible in the output otherwise. */
+  workModeUndeclarable: string[];
   /** Roles already in the canonical history or in Review.xlsx. */
   duplicates: Card[];
   report: SourceReport[];
@@ -238,6 +244,9 @@ export async function runPipeline(
     falseFriendHits: scored.falseFriendHits,
     aggregatorHits,
     aggregatorTable: { source: table.source, missing: table.missing },
+    workModeUndeclarable: [
+      ...new Set((cfg.atsBoards ?? []).filter((b) => !WORK_MODE_DECLARABLE[b.kind]).map((b) => b.kind)),
+    ],
     report,
     counters: {
       queriesTried: queries.length,

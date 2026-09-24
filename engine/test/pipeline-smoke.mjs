@@ -353,7 +353,7 @@ const cfg = {
   assert.deepEqual(
     r.kept.map((c) => c.company).sort(),
     ['Alpha', 'Epsilon'],
-    'A1 §47: an undeclared — or explicitly unestablished — work mode must not exclude',
+    'A1 §46: an undeclared — or explicitly unestablished — work mode must not exclude',
   );
   assert.ok(
     r.excluded.every((e) => e.detail.length > 0),
@@ -371,7 +371,44 @@ const cfg = {
   assert.equal(r.counters.excluded, 3);
 }
 
+// ---------------------------------------------------------------------------
+// 9. What this run could NOT gate.
+//
+//    A1's duty is to declare coverage, and a ground that is dead for a whole
+//    branch is coverage. Greenhouse's board API declares no work mode, so
+//    `fully-remote` cannot fire on it before a read — that belongs in the run
+//    report, not in the head of whoever happens to open `ats.ts`.
+// ---------------------------------------------------------------------------
+{
+  const stub = { id: 'stub', async discover() { return []; } };
+  const r = await runPipeline(
+    [stub],
+    {
+      ...cfg,
+      atsBoards: [
+        { kind: 'greenhouse', board: 'acme', company: 'Acme' },
+        { kind: 'lever', board: 'beta', company: 'Beta' },
+        { kind: 'greenhouse', board: 'acme2', company: 'Acme2' },
+      ],
+    },
+    {},
+    { rates: { stub: 1000 } },
+  );
+  assert.deepEqual(
+    r.workModeUndeclarable,
+    ['greenhouse'],
+    'only the kinds that cannot declare one, named once each — Lever is not a gap',
+  );
+
+  const noBoards = await runPipeline([stub], cfg, {}, { rates: { stub: 1000 } });
+  assert.deepEqual(
+    noBoards.workModeUndeclarable,
+    [],
+    'derived from the boards actually configured, so it cannot claim a coverage the run does not have',
+  );
+}
+
 console.log(
   'pipeline-smoke: OK (fan-out, tagging, geo->gates->dedup->prefilter order, no silent loss, ' +
-    'source isolation, cap, A1 §Fonti attribution, A1 §44 admissibility)',
+    'source isolation, cap, A1 §Fonti attribution, A1 §44 admissibility, declared coverage)',
 );

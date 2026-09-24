@@ -5,17 +5,29 @@
 //   (undocumented public endpoint backing jobs.ashbyhq.com/<board>; probed
 //   2026-09-10, returns {jobs:[{id,title,location,employmentType,isListed,
 //   jobUrl,...}]}). employmentType "Intern" is the intern signal.
+//   Re-probed 2026-09-24 for the work mode A1 §44 needs: `workplaceType` is
+//   `OnSite|Hybrid|Remote` plus `null`, and `isRemote` is a DIFFERENT question
+//   — see the note in the branch below.
 // - Generic employer page: fetchText + intern-signal scan + apply-link
 //   extraction. Used for verify-first (A1: employer preferred) and for
 //   unknown ATS / self-built career pages (layer 3).
 import type { Card } from '../types.js';
 import type { Guard } from '../ratelimit.js';
+import { workModeFrom } from '../admissibility.js';
 import { fetchGuarded, fetchText } from './http.js';
 
 const INTERN_HINT = /\b(intern|internship|stage|stagista|tirocinio|tirocinante|working student|curricular)\b/i;
 
-export async function ashbyBoard(board: string, company: string): Promise<Card[]> {
-  const res = await fetchText(`https://api.ashbyhq.com/posting-api/job-board/${board}`);
+export async function ashbyBoard(
+  board: string,
+  company: string,
+  // Injectable for the same reason `atsAdapter` and `linkedinGuestAdapter` are:
+  // the alternative is a test that depends on a live board's current postings,
+  // and the thing worth testing here is a mapping, not a board.
+  opts: { baseUrl?: string } = {},
+): Promise<Card[]> {
+  const base = opts.baseUrl ?? 'https://api.ashbyhq.com';
+  const res = await fetchText(`${base}/posting-api/job-board/${board}`);
   if (!res.ok) return [];
   try {
     const data = JSON.parse(res.text) as {
@@ -27,6 +39,9 @@ export async function ashbyBoard(board: string, company: string): Promise<Card[]
         isListed?: boolean;
         jobUrl?: string;
         descriptionPlain?: string;
+        workplaceType?: string | null;
+        /** Present in the payload and deliberately NOT read — see below. */
+        isRemote?: boolean | null;
       }>;
     };
     const out: Card[] = [];
@@ -43,6 +58,15 @@ export async function ashbyBoard(board: string, company: string): Promise<Card[]
         sourceJobId: `ashby:${j.id}`,
         source: 'employer',
         discoveryQuery: `ashby:${board}`,
+        // `workplaceType`, NOT `isRemote`. Measured on a live board
+        // (2026-09-24): `isRemote` is true for 141 of 155 postings while
+        // `workplaceType` is Remote for 16 of them, and on another board it was
+        // true for all 30 including the one Hybrid posting. So `isRemote` means
+        // "may work remotely", not "entirely remote" — reading it would have
+        // excluded ~91% of a board under a ground A1 reserves for work
+        // *interamente* da remoto. An unused field that looks like the answer is
+        // how a whole branch dies quietly.
+        workMode: workModeFrom(j.workplaceType),
       });
     }
     return out;

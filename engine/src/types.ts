@@ -26,7 +26,7 @@ export interface Card {
    *  Carried rather than discarded so `Roles.xlsx` can show the mirrors. */
   alternateUrls?: string[];
   /** Work mode as the SOURCE declared it, from the closed set in
-   *  `admissibility.ts`. Absent means undeclared, and A1 §47 keeps an undeclared
+   *  `admissibility.ts`. Absent means undeclared, and A1 §46 keeps an undeclared
    *  field uncertain rather than excluding on it — which is why this is optional
    *  and why `to_verify` is a member of the set. */
   workMode?: WorkMode;

@@ -4,7 +4,7 @@
 // than the first:
 //
 //   1. The four grounds fire. Each case below is a sentence of A1 §44.
-//   2. **An undeclared field excludes nothing.** A1 §47 — "Modalità di lavoro,
+//   2. **An undeclared field excludes nothing.** A1 §46 — "Modalità di lavoro,
 //      lingua o idoneità curricolare non dichiarate: mantenere l'incertezza" —
 //      is what keeps this from becoming a filter that quietly drops the roles
 //      nobody could confirm. Most of the cases below are the negative ones.
@@ -13,6 +13,7 @@ import {
   admissibilityVerdict,
   isWorkMode,
   normLanguage,
+  workModeFrom,
   WORK_MODES,
 } from '../lib/admissibility.js';
 
@@ -48,7 +49,7 @@ const ground = (fields) => {
   assert.equal(
     ground({ title: zenesis.title }),
     'ammissibile',
-    'with nothing declared, A1 §47 keeps the uncertainty rather than excluding',
+    'with nothing declared, A1 §46 keeps the uncertainty rather than excluding',
   );
 }
 
@@ -77,7 +78,7 @@ assert.equal(ground({ title: 'Stage', workMode: 'onsite' }), 'ammissibile');
 assert.equal(
   ground({ title: 'Stage', workMode: 'to_verify' }),
   'ammissibile',
-  'A1 §47: work mode not established keeps the uncertainty, it does not exclude',
+  'A1 §46: work mode not established keeps the uncertainty, it does not exclude',
 );
 
 // The work mode is a CLOSED set, for the reason `Contact Search Status` is one:
@@ -88,6 +89,26 @@ assert.ok(WORK_MODES.includes('to_verify'), 'the not-established value must be a
 assert.equal(isWorkMode('fully_remote'), true);
 assert.equal(isWorkMode('100% télétravail'), false, 'free text must be refused rather than silently accepted');
 assert.equal(isWorkMode('remote'), false, 'and so must a partial spelling — the exclusion is for ENTIRELY remote');
+
+// `workModeFrom` is the other direction: a SOURCE's spelling folded onto the
+// canonical set. Lever sends `onsite|hybrid|remote`, Ashby sends
+// `OnSite|Hybrid|Remote` and sometimes null, and neither uses our casing.
+// Unknown values must come back undeclared, never coerced — an unrecognised
+// spelling that fell back to `onsite` would be the opposite error, and nothing
+// would report it.
+assert.equal(workModeFrom('remote'), 'fully_remote');
+assert.equal(workModeFrom('Remote'), 'fully_remote', 'the API casing must not matter');
+assert.equal(workModeFrom('OnSite'), 'onsite');
+assert.equal(workModeFrom('hybrid'), 'hybrid');
+assert.equal(workModeFrom('fully_remote'), 'fully_remote', 'our own value must round-trip');
+assert.equal(workModeFrom('  Hybrid  '), 'hybrid');
+assert.equal(workModeFrom(null), undefined, 'Ashby sends null for postings it has not classified');
+assert.equal(workModeFrom(undefined), undefined);
+assert.equal(workModeFrom('Flexible'), undefined, 'an unknown value is undeclared, not a guess');
+assert.equal(workModeFrom(3), undefined, 'and a non-string is not a value');
+// An undeclared work mode must survive into the rule as `ammissibile`, or the
+// mapping and the gate would disagree about what "unknown" means.
+assert.equal(ground({ title: 'Stage', workMode: workModeFrom(null) }), 'ammissibile');
 
 // ---------------------------------------------------------------------------
 // §44 "annuncio chiaramente chiuso". Declared first, cheap signal second.
@@ -117,7 +138,7 @@ assert.equal(
 assert.equal(
   ground({ title: 'Stage', requiredLanguages: ['francese'] }),
   'ammissibile',
-  'A1 §47 again — with A3 not declaring its languages, no language can exclude',
+  'A1 §46 again — with A3 not declaring its languages, no language can exclude',
 );
 assert.equal(
   ground({ title: 'Stage', requiredLanguages: ['French'], admittedLanguages: ['italiano', 'inglese'] }),

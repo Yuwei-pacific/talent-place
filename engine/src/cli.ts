@@ -69,6 +69,12 @@ function summary(r: PipelineResult, masterId: string, edition: string): string {
     for (const e of r.excluded) byGround.set(e.ground, (byGround.get(e.ground) ?? 0) + 1);
     lines.push(`  excluded  ${r.excluded.length} by A1 §44: ${[...byGround].map(([g, n]) => `${g} ${n}`).join(', ')}`);
   }
+  if (r.workModeUndeclarable.length) {
+    lines.push(
+      `  coverage  work mode not declarable by: ${r.workModeUndeclarable.join(', ')}` +
+        ` — A1 §44 fully-remote cannot fire on those boards, only in admit`,
+    );
+  }
   if (r.aggregatorTable.missing) lines.push(`  WARNING   aggregator table not found at ${r.aggregatorTable.source}`);
   const inert = Object.entries(r.aggregatorHits).filter(([, n]) => n === 0).map(([p]) => p);
   if (inert.length) lines.push(`  inert     aggregator entries that never fired: ${inert.join(', ')}`);
@@ -99,7 +105,7 @@ const USAGE = [
   'exclusions.json. It exists because that rule had no home: the 2026-09-22 run',
   'carried a hand-written `work_mode == "remote"` gate in a script outside this',
   'repo, which is the only reason the Zenesis role did not reach Review.xlsx, and',
-  'the next run had no such gate. Declared fields only — A1 §47 keeps an',
+  'the next run had no such gate. Declared fields only — A1 §46 keeps an',
   'undeclared field uncertain, so only a declaration can exclude.',
   '',
   'indeed prints A4\'s mandatory Indeed line and refuses when X != Y + Z + P. It',
@@ -376,6 +382,9 @@ async function main(): Promise<number> {
         aggregatorHits: result.aggregatorHits,
         aggregatorTable: result.aggregatorTable,
         excludedPerRule: counters.excludedPerRule,
+        // What this run could NOT gate, said out loud. A1's duty is to declare
+        // coverage, and a ground that is dead for a whole branch is coverage.
+        workModeUndeclarable: result.workModeUndeclarable,
       },
       null,
       1,
