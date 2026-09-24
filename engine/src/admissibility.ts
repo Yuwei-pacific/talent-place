@@ -52,6 +52,16 @@ export function isWorkMode(value: string): value is WorkMode {
   return (WORK_MODES as readonly string[]).includes(value);
 }
 
+/** The two readings of a language list. Closed for the same reason the work
+ *  modes are: a third spelling would be a value nothing understands, sitting in
+ *  a run looking like a decision. */
+export const LANGUAGE_REQUIREMENTS = ['all', 'any'] as const;
+export type LanguageRequirement = (typeof LANGUAGE_REQUIREMENTS)[number];
+
+export function isLanguageRequirement(value: unknown): value is LanguageRequirement {
+  return typeof value === 'string' && (LANGUAGE_REQUIREMENTS as readonly string[]).includes(value);
+}
+
 /**
  * Map a SOURCE's own spelling onto the canonical set.
  *
@@ -124,6 +134,23 @@ export interface AdmissibilityFields {
   /** Only the languages the ad MANDATES. A1: "Una terza lingua solo preferita
    *  non impone l'esclusione." */
   requiredLanguages?: string[];
+  /**
+   * How to read a list of more than one: must the candidate have ALL of them, or
+   * is ANY one enough?
+   *
+   * It is not a detail — the two readings give OPPOSITE answers on the same
+   * list. "English or French required" is satisfied by an admitted language and
+   * is NOT an incompatibility; "Fluent in English, French and Spanish" demands
+   * two languages outside the admitted set and IS one. A flat list cannot say
+   * which, so a caller that supplies `requiredLanguages` has to say.
+   *
+   * Defaults to `any`, deliberately. A1 §46 keeps the uncertainty, and the two
+   * errors are not symmetric: `any` under-excludes, which puts a language
+   * mismatch in front of a person; `all` over-excludes, which drops a role that
+   * an admitted language would have satisfied, silently. `admit` refuses the
+   * ambiguity outright, so a run has to choose rather than inherit this default.
+   */
+  languageRequirement?: 'all' | 'any';
   /** The languages A3 admits. Absent means undeclared, and then no language can
    *  exclude — the rule needs both sides to say anything. */
   admittedLanguages?: string[];
@@ -167,14 +194,25 @@ export function admissibilityVerdict(f: AdmissibilityFields): Admissibility {
   // "lingua obbligatoria incompatibile con le lingue ammesse e senza alternativa"
   const required = (f.requiredLanguages ?? []).map(normLanguage).filter(Boolean);
   const admitted = new Set((f.admittedLanguages ?? []).map(normLanguage).filter(Boolean));
-  // "e senza alternativa": one admitted language among the required ones is an
-  // alternative, and a merely-preferred language never reaches `required`.
-  if (required.length > 0 && admitted.size > 0 && required.every((l) => !admitted.has(l))) {
-    return {
-      verdict: 'escluso',
-      ground: 'mandatory-language',
-      detail: `lingue obbligatorie ${required.join(', ')} fuori dalle ammesse ${[...admitted].join(', ')}`,
-    };
+  // "e senza alternativa" is the whole question, and it is a question about the
+  // AD's shape rather than about any one language. See `languageRequirement`.
+  //   all -> satisfiable only if every demanded language is admitted
+  //   any -> satisfiable if one of them is; that one IS the alternative
+  if (required.length > 0 && admitted.size > 0) {
+    const satisfiable =
+      f.languageRequirement === 'all'
+        ? required.every((l) => admitted.has(l))
+        : required.some((l) => admitted.has(l));
+    if (!satisfiable) {
+      return {
+        verdict: 'escluso',
+        ground: 'mandatory-language',
+        detail:
+          `lingue obbligatorie ${required.join(', ')} (richiesta: ` +
+          `${f.languageRequirement === 'all' ? 'tutte' : 'almeno una'}) ` +
+          `fuori dalle ammesse ${[...admitted].join(', ')}`,
+      };
+    }
   }
 
   return { verdict: 'ammissibile' };

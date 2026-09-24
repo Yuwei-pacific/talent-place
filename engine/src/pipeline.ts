@@ -13,7 +13,7 @@ import type { Card, SourceAdapter } from './types.js';
 import type { ScoredCard } from './prefilter.js';
 import { WORK_MODE_DECLARABLE, type AtsBoard } from './discovery/ats.js';
 import { geoFilter } from './geo.js';
-import { dedupCards } from './dedup-cards.js';
+import { dedupCards, type NearDuplicate } from './dedup-cards.js';
 import { prefilter } from './prefilter.js';
 import { admissibilityVerdict, type AdmissibilityGround } from './admissibility.js';
 import { loadAggregators, defaultAggregatorPath, aggregatorFor, type AggregatorTable } from './attribution.js';
@@ -95,6 +95,9 @@ export interface PipelineResult {
   workModeUndeclarable: string[];
   /** Roles already in the canonical history or in Review.xlsx. */
   duplicates: Card[];
+  /** Cards A4 §9 calls one role that the URL/ID merge could not join — reported
+   *  for a person, never merged. See `dedup-cards.ts::NearDuplicate`. */
+  nearDuplicates: NearDuplicate[];
   report: SourceReport[];
   counters: {
     queriesTried: number;
@@ -102,6 +105,11 @@ export interface PipelineResult {
     afterGeo: number;
     unresolved: number;
     excluded: number;
+    /** Cards merged into another by `dedupCards`. An exit with no bucket until
+     *  2026-09-24, when a real fan-out left 2910 of 3681 cards unaccounted for:
+     *  the count existed on `DedupResult` and the pipeline dropped it. */
+    merged: number;
+    nearDuplicates: number;
     afterDedup: number;
     duplicates: number;
     kept: number;
@@ -220,7 +228,8 @@ export async function runPipeline(
     else excluded.push({ card: c, ground: v.ground, detail: v.detail });
   }
 
-  const unique = dedupCards(admissible).unique;
+  const dedup = dedupCards(admissible);
+  const unique = dedup.unique;
   const split = deps.historyDup ? deps.historyDup(unique) : { fresh: unique, duplicates: [] as Card[] };
 
   const scored = prefilter(split.fresh, {
@@ -241,6 +250,7 @@ export async function runPipeline(
     unresolved,
     excluded,
     duplicates: split.duplicates,
+    nearDuplicates: dedup.nearDuplicates,
     falseFriendHits: scored.falseFriendHits,
     aggregatorHits,
     aggregatorTable: { source: table.source, missing: table.missing },
@@ -254,6 +264,8 @@ export async function runPipeline(
       afterGeo: eu.length,
       unresolved: unresolved.length,
       excluded: excluded.length,
+      merged: dedup.dupCount,
+      nearDuplicates: dedup.nearDuplicates.length,
       afterDedup: unique.length,
       duplicates: split.duplicates.length,
       kept: kept.length,

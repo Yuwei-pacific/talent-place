@@ -19,7 +19,13 @@ import { defaultAdapters } from './discovery/run.js';
 import { loadHistory, checkDup } from './history.js';
 import { runVerification, parseTargets } from './verify.js';
 import { newCounters, indeedLine, exclude } from './observe.js';
-import { admissibilityVerdict, isWorkMode, WORK_MODES } from './admissibility.js';
+import {
+  admissibilityVerdict,
+  isWorkMode,
+  isLanguageRequirement,
+  LANGUAGE_REQUIREMENTS,
+  WORK_MODES,
+} from './admissibility.js';
 
 function parseArgs(argv: string[]): Record<string, string> {
   const out: Record<string, string> = {};
@@ -60,9 +66,10 @@ function summary(r: PipelineResult, masterId: string, edition: string): string {
   const lines: string[] = [];
   lines.push(`${masterId} ${edition}`);
   lines.push(`  queries   ${c.queriesTried}`);
-  lines.push(`  cards     ${c.cardsSeen} seen -> ${c.afterGeo} in-scope -> ${c.afterDedup} unique -> ${c.duplicates} already known`);
+  lines.push(`  cards     ${c.cardsSeen} seen -> ${c.afterGeo} in-scope -> ${c.afterDedup} unique (${c.merged} merged) -> ${c.duplicates} already known`);
   lines.push(`  kept      ${c.kept} (dropped by prefilter: ${c.dropped})`);
   if (r.droppedNonEu.length) lines.push(`  non-EU    ${r.droppedNonEu.length} dropped by geography`);
+  if (c.nearDuplicates) lines.push(`  suspect   ${c.nearDuplicates} group(s) A4 §9 calls one role but the URL/ID merge could not join — in dropped.json, for a person`);
   if (r.unresolved.length) lines.push(`  unattrib. ${r.unresolved.length} posted by a board or agency, not an employer (A1 §Fonti)`);
   if (r.excluded.length) {
     const byGround = new Map<string, number>();
@@ -160,7 +167,19 @@ function cmdAdmit(args: Record<string, string>): number {
     if (r?.applicationOpen !== undefined && typeof r.applicationOpen !== 'boolean') {
       problems.push(`${where}.applicationOpen must be true or false, got ${JSON.stringify(r.applicationOpen)}`);
     }
-    strList(r?.requiredLanguages, `${where}.requiredLanguages`);
+    const reqLangs = strList(r?.requiredLanguages, `${where}.requiredLanguages`);
+    // Refused rather than defaulted, because the two readings give OPPOSITE
+    // verdicts on the same list and the code cannot tell which the ad meant.
+    // Found on the 2026-09-24 Strategic design run: "Fluent level of English,
+    // French and Spanish" was NOT excluded, because a flat list was read as
+    // "any of these is enough" and English is admitted.
+    if (reqLangs.length > 0 && !isLanguageRequirement(r?.languageRequirement)) {
+      problems.push(
+        `${where}.languageRequirement must be one of ${LANGUAGE_REQUIREMENTS.join('|')} ` +
+          `when requiredLanguages is given: "all" if the ad demands every one of them, ` +
+          `"any" if one is enough. They give opposite verdicts, so it cannot be defaulted.`,
+      );
+    }
   });
   if (problems.length) {
     process.stderr.write(`admit refused ${fieldsPath}:\n${problems.map((p) => `  ${p}\n`).join('')}`);
@@ -175,6 +194,7 @@ function cmdAdmit(args: Record<string, string>): number {
       workMode: r.workMode as string | undefined,
       applicationOpen: r.applicationOpen as boolean | undefined,
       requiredLanguages: (r.requiredLanguages as string[] | undefined) ?? [],
+      languageRequirement: r.languageRequirement as 'all' | 'any' | undefined,
       // Per-role wins when a role carries its own, otherwise A3's list decides.
       admittedLanguages: (r.admittedLanguages as string[] | undefined) ?? admittedLanguages,
     });
@@ -358,6 +378,10 @@ async function main(): Promise<number> {
         // than folded into `prefilterDropped` — A4 requires that incompatibility,
         // duplication and unreliability not be confused with one another.
         excluded: result.excluded,
+        // A4 §9's third dedup key, as candidates for a person to confirm. Never
+        // merged: two identical titles at one company in one city can be two
+        // openings, and A4 says confirm identity before merging records.
+        nearDuplicates: result.nearDuplicates,
         duplicates: result.duplicates,
       },
       null,
@@ -382,6 +406,7 @@ async function main(): Promise<number> {
         aggregatorHits: result.aggregatorHits,
         aggregatorTable: result.aggregatorTable,
         excludedPerRule: counters.excludedPerRule,
+        nearDuplicates: result.counters.nearDuplicates,
         // What this run could NOT gate, said out loud. A1's duty is to declare
         // coverage, and a ground that is dead for a whole branch is coverage.
         workModeUndeclarable: result.workModeUndeclarable,

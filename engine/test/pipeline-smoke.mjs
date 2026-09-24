@@ -169,7 +169,9 @@ const cfg = {
 //
 //    Every new exit path has to be added here, and that is the point of the
 //    assertion rather than an annoyance: a gate that removes cards without a
-//    bucket is exactly how a rule becomes invisible.
+//    bucket is exactly how a rule becomes invisible. `merged` joined the list on
+//    2026-09-24, when a real 3681-card fan-out left 2910 cards unaccounted for
+//    because `dedupCards` counted them and the pipeline dropped the count.
 // ---------------------------------------------------------------------------
 {
   const stub = {
@@ -189,7 +191,8 @@ const cfg = {
     r.droppedNonEu.length +
     r.unresolved.length +
     r.excluded.length +
-    r.duplicates.length;
+    r.duplicates.length +
+    r.counters.merged;
   assert.equal(accounted, r.counters.cardsSeen, `${accounted} != ${r.counters.cardsSeen}: a card left the run through no named exit`);
   assert.equal(r.kept.length, 1, 'topK is honoured');
   assert.equal(r.dropped.length, 1, 'what topK cut is kept, not discarded');
@@ -408,7 +411,31 @@ const cfg = {
   );
 }
 
+// ---------------------------------------------------------------------------
+// 10. A4 §9's third dedup key is REPORTED, never merged, and it reaches the
+//     pipeline result — a group nobody can see is a group nobody can resolve.
+// ---------------------------------------------------------------------------
+{
+  const stub = {
+    id: 'stub',
+    async discover() {
+      return [
+        card({ company: 'Ferrero', sourceJobId: '1', url: 'https://example.com/a', title: 'Assistant Glaces' }),
+        card({ company: 'Ferrero', sourceJobId: '2', url: 'https://example.com/b', title: 'Assistant Glaces' }),
+        card({ company: 'Ferrero', sourceJobId: '3', url: 'https://example.com/c', title: 'Chef de Projet' }),
+      ];
+    },
+  };
+  const r = await runPipeline([stub], { ...cfg, topK: 10 }, {}, { rates: { stub: 1000 } });
+  assert.equal(r.nearDuplicates.length, 1, 'the pair A4 calls one role must be surfaced');
+  assert.equal(r.nearDuplicates[0].cards.length, 2);
+  assert.equal(r.kept.length, 3, 'reported is not merged: all three still reach the corpus');
+  assert.equal(r.counters.nearDuplicates, 1);
+  assert.equal(r.counters.merged, 0, 'nothing was merged — the ids and URLs differ');
+}
+
 console.log(
   'pipeline-smoke: OK (fan-out, tagging, geo->gates->dedup->prefilter order, no silent loss, ' +
-    'source isolation, cap, A1 §Fonti attribution, A1 §44 admissibility, declared coverage)',
+    'source isolation, cap, A1 §Fonti attribution, A1 §44 admissibility, declared coverage, ' +
+    'A4 §9 near-duplicates reported)',
 );

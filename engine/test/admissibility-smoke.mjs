@@ -145,6 +145,28 @@ assert.equal(
   'mandatory-language',
   'endonyms and codes fold to one name, so "French" and "francese" cannot disagree',
 );
+
+// A list of more than one language is ambiguous, and the two readings give
+// OPPOSITE verdicts — so the caller has to say which the ad meant. Found on the
+// 2026-09-24 Strategic design run, where a flat list was read as a disjunction
+// and "Fluent level of English, French and Spanish" slipped through because
+// English is admitted.
+const MSX = { title: 'Customer Service Specialist', requiredLanguages: ['inglese', 'francese', 'spagnolo'], admittedLanguages: IT_EN };
+assert.equal(
+  ground({ ...MSX, languageRequirement: 'all' }),
+  'mandatory-language',
+  '"Fluent in English, French and Spanish" demands all three, and two are outside the admitted set',
+);
+assert.equal(
+  ground({ ...MSX, languageRequirement: 'any' }),
+  'ammissibile',
+  'the same list read as "any one is enough" is satisfied by English',
+);
+// The reading the other way round: an ad that genuinely offers a choice must not
+// be excluded just because one option is outside the admitted set.
+const CHOICE = { title: 'Stage', requiredLanguages: ['inglese', 'francese'], admittedLanguages: IT_EN };
+assert.equal(ground({ ...CHOICE, languageRequirement: 'any' }), 'ammissibile', '"English or French" has an alternative');
+assert.equal(ground({ ...CHOICE, languageRequirement: 'all' }), 'mandatory-language', '"English and French" does not');
 assert.equal(
   ground({ title: 'Stage', requiredLanguages: ['FR'], admittedLanguages: ['francese'] }),
   'ammissibile',
