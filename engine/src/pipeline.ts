@@ -11,10 +11,12 @@
 // between requests were all invented in the moment and discarded with the file.
 import type { Card, SourceAdapter } from './types.js';
 import type { ScoredCard } from './prefilter.js';
-import type { AtsBoard } from './discovery/ats.js';
+import { WORK_MODE_DECLARABLE, type AtsBoard } from './discovery/ats.js';
 import { geoFilter } from './geo.js';
-import { dedupCards } from './dedup-cards.js';
+import { dedupCards, type NearDuplicate } from './dedup-cards.js';
 import { prefilter } from './prefilter.js';
+import { admissibilityVerdict, type AdmissibilityGround } from './admissibility.js';
+import { loadAggregators, defaultAggregatorPath, aggregatorFor, type AggregatorTable } from './attribution.js';
 import { runDiscovery, DEFAULT_CAP, type RunOptions, type SourceReport } from './discovery/run.js';
 
 export interface PipelineConfig {
@@ -34,6 +36,11 @@ export interface PipelineConfig {
   atsBoards?: AtsBoard[];
   /** Cards kept after scoring. The rest stay in `dropped`, never discarded. */
   topK: number;
+  /** The languages A3 admits. Absent means undeclared, and A1 §46 then excludes
+   *  nothing on language — that ground needs both sides to say something. */
+  admittedLanguages?: string[];
+  /** Known boards and agencies. Absent reads `engine/data/aggregators.csv`. */
+  aggregators?: string;
   rates?: Record<string, number>;
   cap?: number;
 }
@@ -45,6 +52,15 @@ export interface TaggedCard extends Card {
   queries: string[];
 }
 
+/** A card A1 §44 excluded, with the ground that fired. The ground is the reason
+ *  A4 requires ("mostrare fino a cinque esempi motivati") and the key the run's
+ *  `excludedPerRule` counter is built from. */
+export interface ExcludedCard {
+  card: Card;
+  ground: AdmissibilityGround;
+  detail: string;
+}
+
 export interface PipelineResult {
   queries: string[];
   cards: TaggedCard[];
@@ -52,16 +68,48 @@ export interface PipelineResult {
   dropped: TaggedCard[];
   /** Cards dropped for being outside the admitted geography. */
   droppedNonEu: Card[];
+  /** Cards whose poster is a discovery source rather than an employer (A1
+   *  §Fonti). Not attributed to the board, and not discarded either: A1 says the
+   *  candidate "resta non risolto", which is a named exit the agent can act on.
+   *  `card.poster` holds the board's name for `Sources / Portals`. */
+  unresolved: Card[];
+  /** Cards A1 §44 excludes, each with the ground that fired. Separate from
+   *  droppedNonEu (geography) and from prefilter's `dropped` (relevance): A4
+   *  requires that incompatibility, duplication and unreliability not be
+   *  confused with one another. */
+  excluded: ExcludedCard[];
   /** Cards matching a false friend. Reported per term so a list that cannot
    *  fire is visible instead of merely populated — see prefilter.ts. */
   falseFriendHits: Record<string, number>;
+  /** The same remedy for the aggregator table: hit counts per entry, so an entry
+   *  that stopped firing says so rather than sitting there looking like cover. */
+  aggregatorHits: Record<string, number>;
+  /** Where the aggregator table came from, and whether it was there at all.
+   *  "missing" and "empty" are different answers. */
+  aggregatorTable: { source: string; missing: boolean };
+  /** Board kinds on this run whose API cannot declare a work mode, so A1 §44's
+   *  `fully-remote` ground cannot fire against them at this stage and is left to
+   *  `admit`. Derived from the boards actually configured, so it cannot claim a
+   *  coverage the run does not have — and reported at all because "which grounds
+   *  are live on this run" is invisible in the output otherwise. */
+  workModeUndeclarable: string[];
   /** Roles already in the canonical history or in Review.xlsx. */
   duplicates: Card[];
+  /** Cards A4 §9 calls one role that the URL/ID merge could not join — reported
+   *  for a person, never merged. See `dedup-cards.ts::NearDuplicate`. */
+  nearDuplicates: NearDuplicate[];
   report: SourceReport[];
   counters: {
     queriesTried: number;
     cardsSeen: number;
     afterGeo: number;
+    unresolved: number;
+    excluded: number;
+    /** Cards merged into another by `dedupCards`. An exit with no bucket until
+     *  2026-09-24, when a real fan-out left 2910 of 3681 cards unaccounted for:
+     *  the count existed on `DedupResult` and the pipeline dropped it. */
+    merged: number;
+    nearDuplicates: number;
     afterDedup: number;
     duplicates: number;
     kept: number;
@@ -116,15 +164,19 @@ export function tagCards(cards: Card[], pairs: Array<{ query: string; area: stri
 export interface PipelineDeps {
   /** Injected so the pipeline can be tested without a network. */
   historyDup?: (cards: Card[]) => { fresh: Card[]; duplicates: Card[] };
+  /** Injected so a test needs no file on disk. Defaults to the table that ships
+   *  with the engine. */
+  aggregators?: AggregatorTable;
 }
 
 /**
  * Run the whole deterministic pipeline.
  *
- * Order matters and is asserted by the tests: geo first (a non-EU card should
- * not consume dedup work), then dedup, then prefilter. Dedup runs BEFORE
- * prefilter so that duplicates from the (query x location) fan-out do not
- * consume topK slots or the detail-reading budget.
+ * Order matters and is asserted by the tests: geo, then the two A1 gates, then
+ * dedup, then prefilter. Every stage that can remove a card runs before the one
+ * that costs more — a non-EU card should not consume dedup work, an unattributable
+ * one should not consume it either, and neither should occupy a topK slot or a
+ * share of the detail-reading budget.
  */
 export async function runPipeline(
   adapters: SourceAdapter[],
@@ -142,7 +194,42 @@ export async function runPipeline(
   });
 
   const { eu, droppedNonEu } = geoFilter(cards);
-  const unique = dedupCards(eu).unique;
+
+  // A1 §Fonti, before anything groups by company. An aggregator's name must not
+  // reach `Company / Outreach Account`, and it must not reach the dedup keys
+  // either — the two copies of the Italdesign CMF role carried different URLs and
+  // different company names, so `dedupCards` could not have caught them.
+  const table = deps.aggregators ?? loadAggregators(cfg.aggregators ?? defaultAggregatorPath());
+  const aggregatorHits: Record<string, number> = {};
+  for (const e of table.entries) aggregatorHits[e.pattern] = 0;
+  const attributed: Card[] = [];
+  const unresolved: Card[] = [];
+  for (const c of eu) {
+    const hit = aggregatorFor(c.company, table);
+    if (!hit) {
+      attributed.push(c);
+      continue;
+    }
+    aggregatorHits[hit.pattern]++;
+    // `company` is left as observed: it is the evidence the agent resolves the
+    // real employer against. `poster` carries the board for `Sources / Portals`,
+    // and the bucket — not an empty string — is what stops the attribution.
+    unresolved.push({ ...c, poster: c.company });
+  }
+
+  // A1 §44, before the label is ever assigned. Zenesis was judged `pertinente`
+  // on its merits and its own verdict recorded that it was inadmissible; nothing
+  // between the read and the TSV evaluated §44, so it shipped.
+  const excluded: ExcludedCard[] = [];
+  const admissible: Card[] = [];
+  for (const c of attributed) {
+    const v = admissibilityVerdict({ ...c, admittedLanguages: cfg.admittedLanguages });
+    if (v.verdict === 'ammissibile') admissible.push(c);
+    else excluded.push({ card: c, ground: v.ground, detail: v.detail });
+  }
+
+  const dedup = dedupCards(admissible);
+  const unique = dedup.unique;
   const split = deps.historyDup ? deps.historyDup(unique) : { fresh: unique, duplicates: [] as Card[] };
 
   const scored = prefilter(split.fresh, {
@@ -160,13 +247,25 @@ export async function runPipeline(
     kept,
     dropped,
     droppedNonEu,
+    unresolved,
+    excluded,
     duplicates: split.duplicates,
+    nearDuplicates: dedup.nearDuplicates,
     falseFriendHits: scored.falseFriendHits,
+    aggregatorHits,
+    aggregatorTable: { source: table.source, missing: table.missing },
+    workModeUndeclarable: [
+      ...new Set((cfg.atsBoards ?? []).filter((b) => !WORK_MODE_DECLARABLE[b.kind]).map((b) => b.kind)),
+    ],
     report,
     counters: {
       queriesTried: queries.length,
       cardsSeen: cards.length,
       afterGeo: eu.length,
+      unresolved: unresolved.length,
+      excluded: excluded.length,
+      merged: dedup.dupCount,
+      nearDuplicates: dedup.nearDuplicates.length,
       afterDedup: unique.length,
       duplicates: split.duplicates.length,
       kept: kept.length,

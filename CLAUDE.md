@@ -78,7 +78,15 @@ Only `employer-smoke` hits the live network, and because the chain is `&&` its f
 npm run discover -- --config <run.json> --out <dir> --history <exported history.csv>
 ```
 
-`src/cli.ts` is the **deterministic half** of a run: query fan-out → discover → geo → dedup → prefilter → `cards.json` + `run-report.json`. It deliberately stops there. Reading each surviving description and judging it against A1 and the Master's A2 stays with the agent; putting that judgement behind a flag would make it a checkbox.
+`src/cli.ts` is the **deterministic half** of a run: query fan-out → discover → geo → the two A1 gates → dedup → prefilter → `cards.json` + `run-report.json`. It deliberately stops there. Reading each surviving description and judging it against A1 and the Master's A2 stays with the agent; putting that judgement behind a flag would make it a checkbox.
+
+A run's **exclusions are computed, not composed**:
+
+```bash
+npm run build && node lib/cli.js admit --fields <run dir>/declared.json --out <run dir>
+```
+
+`admit` applies A1 §44 to the fields a read established and writes `exclusions.json`. It exists because that rule had no home: on the 2026-09-22 Accessory design ED.14 run the only thing keeping `Zenesis — stage de créateur de bijoux` out of `Review.xlsx` was a hand-written `work_mode == "remote"` check inside `build-tsv.py`, outside this repo — and the role was `pertinente`, score 74, with its *own* verdict recording "Da escludere in ammissibilità: 100% télétravail … e annuncio scaduto". The next run would have had no gate at all. `work_mode` is a **closed set** (`onsite|hybrid|fully_remote|to_verify`) and is refused rather than coerced, for the reason `Contact Search Status` is closed: a value nothing matches sits in the run looking like a field that was checked. Input is JSON, and every problem in it is reported at once.
 
 `run-report.json` records per-source `requests / ok / 429 / 403 / stop_kind / reason`. That is the A1 "declare the reason" duty as data rather than prose.
 
@@ -114,10 +122,12 @@ Without `--evidence` those columns stay empty and the manifest lists them under 
 
 Before `src/cli.ts` existed, the adapters, `geoFilter`, `dedupCards`, `prefilter` and `observe` were all an uncalled library and the run loop lived in a throwaway script — so nothing about a run was reproducible. **If you find yourself writing a `/tmp` script to drive the adapters, that script belongs in `src/` instead.**
 
-## Two rules for whoever is driving a run
+## Rules for whoever is driving a run
 
-Both cost real time on the 2026-09-17 run and neither is enforced by any test, so
-they live here.
+None of these is enforced by any test, and each cost real time or real damage on
+a run that did not have it. The first two come from 2026-09-17, the rest from
+2026-09-24 — the first run of the A1 gates, which is where the unenforced things
+surface. The list has no number in its heading on purpose; it grows.
 
 **Wait for the completion notice; never poll for a file nobody promised.** That
 run spent ~24 minutes in `until [ -f /tmp/employer-verify.json ]; do sleep 15; done`
@@ -136,6 +146,36 @@ alongside one real run artifact, and a fixture filed under a directory called
 A run left in `/tmp` is a run that will be wiped. A4 allows either naming an
 output directory or declaring in the reply that nothing external was saved —
 **at least one of the two must happen**, and silence does neither.
+
+**Never write a URL, a date or a name you did not actually read.** Truncated tool
+output is how this happens: the description is cut at N characters, the URL was
+never printed, and a plausible one is easy to compose in its place. It passes
+every check the tools make — right tab count, valid closed sets, parses as a
+date — and it is the one defect on this list that a colleague pays for. On the
+2026-09-24 run **34 of 48 URLs** in the verdicts were fabricated this way. Print
+what you need before transcribing it, or fetch it again; the cost is one command.
+
+**Read `evidence_join` before `append`, not after.** `stage` reports `filled /
+total` for each column the evidence sidecar feeds, and it is keyed on the URL
+actually joining, so it is the check that caught those 34: it read
+`Posted / Result Age 14/48` while every other validation passed. A number below
+`total` means either the sidecar did not reach those roles or your URLs are not
+the ones the run found. Either way, stop and find out which.
+
+**A count that disagrees with what you wrote is a defect, not a rounding.** The
+same run reported `roles_out: 48` where 47 had been written, because one job
+title contained a `|` — the separator for A4's numbered columns, and nothing
+distinguishes it from a `|` inside a value. `Work Modes` has the same trap with
+`;`, which is what `MULTI_VALUE_SPEC` exists for. Compare `roles_out` and
+`companies_out` against your own TSV before staging.
+
+**`append --dry-run` first, and read `deferred_detail`.** A `similar_name`
+deferral is a question, not a failure — it names a company the ladder would not
+merge on its own, and answering it is one row in `company-aliases.csv`, where the
+next run inherits it. On 2026-09-24 it held back PwC Italy, Accenture Italia and
+Prada, and deferring them was right: each Master edition gets its own folder and
+its own contact history, so a duplicate row reading `New job found` would have
+erased work somebody had already done in it.
 
 ## The A1–A4 method
 
@@ -156,6 +196,12 @@ These are A1/A4 rules expressed as code. Changing one means changing a rule, so 
 
 - **No label or score without a read description.** `labels.ts::decisionToA1` returns `non_risolto` when no reliable description exists, even if a score was passed. Score 0–100 is optional and only ever orders results; the qualitative label (`pertinente` / `adiacente` / `fuori profilo`) is what carries meaning.
 - **Only `pertinente` and `adiacente` reach the main TSV.** `fuori profilo` goes to exclusions; unreliable ones go to unresolved.
+- **A1 §44 is a gate, not a deduction.** An inadmissible role is excluded before a label is ever assigned — `excluded`, with the ground that fired. Scoring it down instead is how a senior or closed post reached `kept` whenever `topK` was not tight. The grounds are `senior-without-stage`, `fully-remote`, `closed-ad`, `mandatory-language`; `sede fuori dai limiti` is `geo.ts`'s and is not duplicated here.
+- **An undeclared field never excludes.** A1 §46, and the reason `admissibility.ts` takes optional inputs and `to_verify` is a value rather than a blank. The gate fires on declarations only.
+- **An aggregator is never an employer.** A board or agency in `company` breaks grouping and history dedup, both of which are per-company. The card goes to `unresolved` with the board recorded as `poster` — the bucket is what refuses the attribution, so `company` stays as observed rather than being emptied.
+- **A4 §9 names three dedup keys and only two are merged.** `dedupCards` joins on the normalised URL and the source id; the third — normalised company + title + city — is REPORTED as `nearDuplicates`, because §9 also says "Confermare l'identità prima di fondere record" and two identical titles at one company in one city can be two openings. Measured: Ferrero's "Assistant Chef de produit Glaces" arrived under two LinkedIn ids with identical company, title, city and date, and both reached `Roles.xlsx` until it was caught by eye.
+- **Every card leaves through a named exit, and "merged" is one.** `dedupCards` counted what it merged and `runPipeline` dropped the count, so 2910 of 3681 cards left a real run unaccounted for — 79% of what it read. `counters.merged` closes the identity, and `pipeline-smoke` asserts it.
+- **A rule that lives in the driver dies with the driver.** This is the class the 2026-09-22 run produced twice: the admissibility gate and the aggregator resolution both existed, both were correct, and both lived in `build-tsv.py` outside this repo. The remedy the repo has settled on is a caller — `observe.ts::indeedLine` and `admissibility.ts` each have a `cli.js` subcommand, and `exclude()`/`excludedPerRule` sat dead until `admit` and `discover` called them. When a rule has no execution path, that is the defect, not the documentation.
 - **`Review.xlsx` is the record; nothing is synced into a second one.** Until 2026-09-18 a canonical CSV sat beside it and three commands wrote into it. All three are gone now, along with the CSV: `pull` and `add_verified.py` carried colleagues' decisions into it, and `backfill-ids` maintained its `Company ID` column — every one of them redundant once Review *is* the record. The canonical was deleted the same day — not archived, `git log --diff-filter=D` — after it was measured 62 companies stale. `propose_company_id` stays, because `append` calls it to give a new company an identity.
 - **Column ownership is data, not a comment.** `reconcile.py` declares `HUMAN_COLS`, `MACHINE_UNION_COLS`, `MACHINE_LATEST_COLS`. A column cannot be in two sets, and tests assert that.
 - **The Python and TypeScript implementations must agree.** `reconcile.py` and `normalize.ts` both read the exported history CSV, so `MULTI_VALUE_SPEC` and `norm_company` are asserted equal across the two languages in `test_sync_export.py`. Two readers disagreeing about one file was a real bug.
@@ -169,7 +215,17 @@ These are A1/A4 rules expressed as code. Changing one means changing a rule, so 
 
 ## Pipeline order (in the engine)
 
-`Card` (a discovery hit) → `geoFilter` → `dedupCards` → `prefilter` → detail fetch/verify → `Role`. Dedup runs **before** prefilter so that duplicates from the (query × location) fan-out don't consume `topK` slots or detail budget.
+`Card` (a discovery hit) → `geoFilter` → `attribution` → `admissibility` → `dedupCards` → `prefilter` → detail fetch/verify → `Role`. Every stage that can remove a card runs before the one that costs more: dedup runs **before** prefilter so duplicates from the (query × location) fan-out don't consume `topK` slots or detail budget, and both A1 gates run before dedup so a card that is leaving anyway never spends a dedup key.
+
+The two gates are the A1 rules that had no execution path. Both leave through their **own** bucket, never folded into `prefilter`'s `dropped` — A4 requires that incompatibility, duplication and unreliability not be confused with one another.
+
+`attribution.ts` is A1 §Fonti. A card whose poster matches `engine/data/aggregators.csv` leaves through `unresolved`, with the board's name in `card.poster` and `company` left exactly as observed: the bucket refuses the attribution, not an emptied field, so the agent still has the evidence to resolve the real employer against. `run-report.json` reports a hit count **per entry** — the same remedy `falseFriendHits` gives an inert false-friend term, because a list that stopped firing must not sit there looking like cover.
+
+`admissibility.ts` is A1 §44's ground list. `senior` and `annuncio chiuso` used to live in `prefilter` as score deductions, which is not a rule — a senior card at base 0.3 lost 0.5 (clamped to 0) but query-term overlap put up to 0.25 back, so it reached `kept` whenever `topK` was not tight. They exclude now, and `prefilter` scores relevance only. `sede fuori dai limiti` stays in `geo.ts` and is deliberately not reimplemented. **Only a declared field excludes**: A1 §46 keeps an undeclared work mode, language or curricular status uncertain, which is why every input to the rule is optional and why `to_verify` is a *member* of the work-mode set rather than the absence of one.
+
+That last constraint decides which sources make `fully-remote` live before a read. Two of the three employer APIs declare a work mode, each in its own casing — Lever sends `onsite|hybrid|remote`, Ashby sends `OnSite|Hybrid|Remote` and sometimes `null` — and `workModeFrom` folds both onto the canonical set, returning undeclared for anything it does not recognise rather than coercing: an unrecognised spelling falling back to `onsite` would be the opposite error, and nothing would report it. Greenhouse declares nothing. Probed 2026-09-24: `metadata` was empty on all 692 Stripe postings, and the only remaining signal is `location.name`, which on that board appeared in 83 distinct spellings, mostly **multi-location** — `"San Francisco, Seattle, New York, Chicago, Remote in the US"`. A1 excludes work *interamente* da remoto, so reading that field would be the marker-list failure in both directions at once. `WORK_MODE_DECLARABLE` records which kind is which, and the run reports the gap as `workModeUndeclarable`: a ground dead for a whole branch is coverage, and A1's duty is to declare coverage.
+
+Ashby also returns `isRemote`, and **it is not this field**. Measured the same day: `isRemote` was true for 141 of 155 postings on one board while `workplaceType` was Remote for 16, and on another it was true for all 30 including the single Hybrid one. It means "may work remotely". Reading it would have excluded ~91% of a board under a ground A1 reserves for work *entirely* remote — a whole branch gone quietly, which is the `BLOCKED_MARKERS` failure arriving through a field that looks like the answer.
 
 `src/discovery/` holds three `SourceAdapter`s and two plain helpers, and the distinction matters — `defaultAdapters` is what decides which of them a run actually reaches:
 
@@ -205,6 +261,10 @@ Indeed direct HTTP is 403 from datacenter clients, so Indeed stays a runtime-dec
 | A Master's professional areas | `config/<Master> ED.NN>/A2-profilo-*.md` |
 | Cohort constraints, `history_file` | `config/<Master> ED.NN>/A3-cohort.yaml` |
 | A new discovery source | `src/discovery/` + add to `tsconfig` `include` + a `test/*-smoke.mjs` appended to the `package.json` chain |
+| Which boards and agencies are not employers | `engine/data/aggregators.csv` — `pattern;note`, where `pattern` is `normCompany` output (the test asserts every entry is a fixed point of it, and that the file is found where the code looks) |
+| An A1 §44 exclusion ground, or the work-mode vocabulary it gates on | `src/admissibility.ts` → `AdmissibilityGround` / `WORK_MODES`, **and** `config/A4` §Destinazione dei risultati — a ground with no home in A4 is a rule only the code knows |
+| An ATS API's workplace field, or which source can declare one | `src/admissibility.ts` → `workModeFrom` (the spelling fold), **and** `WORK_MODE_DECLARABLE` in `src/discovery/ats.ts`. A source that cannot declare one leaves `fully-remote` dead for its whole branch, which the run then reports as `workModeUndeclarable` |
+| The languages a run admits (A1 §44's "lingue ammesse") | `config/<Master> ED.NN>/A3-cohort.yaml` → `search_preferences.job_languages`, which the run copies into its config as `admittedLanguages`. Nothing in the engine reads A3 — it takes no YAML — so the agent supplies it, and A1 §13 is what makes `search_preferences` the operative set |
 | Where a run reads its history | `sync_export.py` → `cmd_export_history`; the run passes the CSV to `discover --history`. `A3.history_file` names the workbook it comes from. |
 | The review columns colleagues see | `sync_export.py` → `REVIEW_COLUMNS`, **then `migrate-review`**. Nothing writes by position: `append` reads the sheet's own row-2 header and writes by name, and `migrate-review` carries cells by column name. The migration is needed because a renamed or added column gets no value written into it at all, the readers refuse a header missing any `REVIEW_COLUMNS` entry, and before they refused, a missing column read as empty rather than failing. **The same edit usually touches `A4_COLUMNS` and `ROLE_COLUMNS` too** — `A4_COLUMNS` is the agent's TSV contract, and it is mirrored by a literal header in A4 §71, by two fixture TSVs and by `parse_tsv`'s width check, none of which is derived from the constant. |
 | The colleague-facing status vocabulary | `CONTACT_STATUS_ORDER` in `sync_export.py` (the ordered tuple; `CONTACT_STATUS_VALUES` is derived from it) **and** A4 — `stage` refuses every row until the two agree. Superseded values go in `LEGACY_CONTACT_STATUS`; a value that is still live in the vocabulary cannot, so re-interpreting one is `migrate-review --reinterpret`. |

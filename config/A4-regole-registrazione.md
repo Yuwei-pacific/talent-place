@@ -18,7 +18,7 @@ Raggruppare per azienda/unità di contatto. Mantenere brand e business unit; non
 
 Essere presenti nel Company Index non significa essere già stati contattati. `Previously Contacted?` va ricavato da prove storiche esplicite. Assenza di storico o valori contraddittori: `To verify`, con nota sul conflitto. Se due campi dello stesso account si contraddicono (es. `Previously Contacted? = No` e `Contact Search Status = Contact found`), non scegliere un lato: verificare prima dell’outreach.
 
-Non sovrascrivere contatti e stati già presenti con i default. Per nuove aziende senza ricerca contatti: `Contact Search Status = Not started`; nome, ruolo ed email/LinkedIn vuoti. Inserire solo referenti supportati da fonti pubbliche affidabili; nessuna email dedotta. L’utente conferma il referente prima dell’outreach.
+Non sovrascrivere contatti e stati già presenti con i default. Per nuove aziende senza ricerca contatti: `Contact Search Status = New job found`; nome, ruolo ed email/LinkedIn vuoti. (`Not started` era il valore della macchina fino al 2026-09-23 e questa riga lo diceva ancora: dal cambio di schema significa invece che una persona ha preso in carico la riga, quindi scriverlo qui avrebbe marcato come «già vista» ogni azienda nuova.) Inserire solo referenti supportati da fonti pubbliche affidabili; nessuna email dedotta. L’utente conferma il referente prima dell’outreach.
 
 `Contact Search Status` è una **lista chiusa di sette valori**. La macchina scrive `New job found` su ogni riga nuova; gli altri li imposta la persona in revisione, e ciascuno descrive un momento diverso del rapporto con l’azienda:
 
@@ -39,7 +39,7 @@ Le proposte entrano nel bacino da valutare, con `Outreach Decision = Review`, an
 ## Destinazione dei risultati
 
 - **TSV principale:** ruoli ammissibili con descrizione affidabile ed etichetta `pertinente` o `adiacente`. I dubbi su campi non dichiarati restano visibili; l’etichetta non certifica curricularità o idoneità individuale. Un’area A2 da confermare è segnalata come `ipotesi operativa`.
-- **Esclusioni:** ruoli `fuori profilo` o incompatibili con i vincoli applicabili. Non inserirli nel TSV principale o nel relativo Role Count. Mostrare fino a cinque esempi motivati.
+- **Esclusioni:** ruoli `fuori profilo` o incompatibili con i vincoli applicabili. Non inserirli nel TSV principale o nel relativo Role Count. Mostrare fino a cinque esempi motivati. L'incompatibilità si stabilisce su ciò che l'annuncio **dichiara**: modalità di lavoro, stato della candidatura, lingua obbligatoria. Un campo non dichiarato mantiene l'incertezza e non esclude (A1) — un ruolo che nessuno ha potuto confermare resta nel bacino da valutare, con il dubbio in evidenza, non fra gli esclusi.
 - **Non risolti:** identità o descrizione non affidabile, oppure luogo non classificabile secondo il formato richiesto. Elencare separatamente URL, informazione mancante e verifica necessaria, senza etichetta di pertinenza o score inventati.
 - **Duplicati storici:** non riproporli come nuove opportunità; contarli nel riepilogo di ricerca, separatamente dagli esclusi e dai non risolti.
 

@@ -1,0 +1,23 @@
+# Posters that are discovery sources, not employers (A1 §Fonti, A4 §Destinazione).
+#
+# pattern is the NORMALISED name — `normCompany` output, lowercase, legal suffix
+# removed. `node -e "import('./lib/normalize.js').then(m=>console.log(m.normCompany('Lavoropiù SpA')))"`
+# prints what to write here. Matched as a whole-token run, so `orienta` catches
+# "Orienta Agenzia per il Lavoro" but never "Orientamento Srl".
+#
+# Every entry is from the 2026-09-22 Accessory design ED.14 run, measured, and
+# nothing here is speculative: A1 says of the false-friend list that "una lista
+# che non può scattare è peggio di una lista vuota, perché sembra una difesa", and
+# the same holds here. `run-report.json` reports a hit count per entry, so an
+# entry that stops firing says so instead of sitting there looking like cover.
+pattern;note
+bof careers;BoF Careers — design/fashion board; republished MIU MIU and PRADA roles
+lemanoosh;design blog; republished the Italdesign CMF role under its own name
+adecco;agenzia per il lavoro
+orienta agenzia per il lavoro;agenzia per il lavoro
+ali lavoro;agenzia per il lavoro
+ali professional;agenzia per il lavoro
+afol milano;agenzia formativa / centro per l'impiego
+lavoropiu;agenzia per il lavoro
+openjobmetis;agenzia per il lavoro
+greta de la creation;réseau d'écoles / republishes placements

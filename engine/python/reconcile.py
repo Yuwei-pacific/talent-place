@@ -131,6 +131,13 @@ _LEGAL_SUFFIX = re.compile(
     re.IGNORECASE,
 )
 
+# A parenthetical is a qualifier, not part of the account name: "Miu Miu
+# (Gruppo Prada)" is the SAME business unit as "Miu Miu" (A4 §13, YUW-76).
+# Stripped before the legal suffix so a parenthetical cannot shield it.
+# Mirrors PARENTHETICAL in engine/src/normalize.ts — the two must agree, and
+# `test_norm_company_parity_with_typescript` asserts it.
+_PARENTHETICAL = re.compile(r"\([^)]*\)")
+
 
 def norm_company(value: str) -> str:
     """Mirror of normCompany() in engine/src/normalize.ts."""
@@ -138,6 +145,7 @@ def norm_company(value: str) -> str:
     s = unicodedata.normalize("NFKD", s)
     # Explicit range (not unicodedata.combining) to match the TS regex exactly.
     s = re.sub(r"[̀-ͯ]", "", s)
+    s = _PARENTHETICAL.sub(" ", s)
     s = _LEGAL_SUFFIX.sub(" ", s)
     s = re.sub(r"[^a-z0-9]+", " ", s)
     return re.sub(r"\s+", " ", s).strip()
