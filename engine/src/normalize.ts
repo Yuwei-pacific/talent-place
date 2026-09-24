@@ -4,6 +4,26 @@
 const LEGAL_SUFFIX =
   /\b(s\.?p\.?a\.?|s\.?r\.?l\.?|s\.?a\.?s\.?|ltd|limited|gmbh|sas|sarl|bv|nv|sl|sa|inc|llc|spa|srl)\b/gi;
 
+/**
+ * A parenthetical in a company name is a qualifier, not part of the account
+ * name. "Miu Miu (Gruppo Prada)" is the SAME business unit as "Miu Miu", and
+ * A4 §13 forbids one unit landing on two rows — measured as YUW-76, where the
+ * qualifier split a business unit across two rows that then could not be
+ * matched to each other.
+ *
+ * Stripped BEFORE `LEGAL_SUFFIX`, so a parenthetical cannot survive as a
+ * distinct key by shielding the suffix inside it.
+ *
+ * Ported from the 2026-09-22 run's `build-tsv.py`, which is where this rule
+ * actually lived while the engine went without it. That script's comment said
+ * "trailing" while its regex removed every parenthetical, anywhere; this is the
+ * behaviour, not the comment. Worth knowing what that costs: two names that
+ * differ ONLY by a parenthetical — and that share a title and a city — now
+ * produce one role key, so `checkDup` could call the second a duplicate. The
+ * city is a separate axis in `crossPortalKey`, which is what keeps that narrow.
+ */
+const PARENTHETICAL = /\([^)]*\)/g;
+
 const CITY_ALIASES: Record<string, string> = {
   milano: 'milan',
   roma: 'rome',
@@ -30,6 +50,7 @@ export function normCompany(value: string): string {
     .toLowerCase()
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
+    .replace(PARENTHETICAL, ' ')
     .replace(LEGAL_SUFFIX, ' ')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
