@@ -122,10 +122,12 @@ Without `--evidence` those columns stay empty and the manifest lists them under 
 
 Before `src/cli.ts` existed, the adapters, `geoFilter`, `dedupCards`, `prefilter` and `observe` were all an uncalled library and the run loop lived in a throwaway script — so nothing about a run was reproducible. **If you find yourself writing a `/tmp` script to drive the adapters, that script belongs in `src/` instead.**
 
-## Two rules for whoever is driving a run
+## Rules for whoever is driving a run
 
-Both cost real time on the 2026-09-17 run and neither is enforced by any test, so
-they live here.
+None of these is enforced by any test, and each cost real time or real damage on
+a run that did not have it. The first two come from 2026-09-17, the rest from
+2026-09-24 — the first run of the A1 gates, which is where the unenforced things
+surface. The list has no number in its heading on purpose; it grows.
 
 **Wait for the completion notice; never poll for a file nobody promised.** That
 run spent ~24 minutes in `until [ -f /tmp/employer-verify.json ]; do sleep 15; done`
@@ -144,6 +146,36 @@ alongside one real run artifact, and a fixture filed under a directory called
 A run left in `/tmp` is a run that will be wiped. A4 allows either naming an
 output directory or declaring in the reply that nothing external was saved —
 **at least one of the two must happen**, and silence does neither.
+
+**Never write a URL, a date or a name you did not actually read.** Truncated tool
+output is how this happens: the description is cut at N characters, the URL was
+never printed, and a plausible one is easy to compose in its place. It passes
+every check the tools make — right tab count, valid closed sets, parses as a
+date — and it is the one defect on this list that a colleague pays for. On the
+2026-09-24 run **34 of 48 URLs** in the verdicts were fabricated this way. Print
+what you need before transcribing it, or fetch it again; the cost is one command.
+
+**Read `evidence_join` before `append`, not after.** `stage` reports `filled /
+total` for each column the evidence sidecar feeds, and it is keyed on the URL
+actually joining, so it is the check that caught those 34: it read
+`Posted / Result Age 14/48` while every other validation passed. A number below
+`total` means either the sidecar did not reach those roles or your URLs are not
+the ones the run found. Either way, stop and find out which.
+
+**A count that disagrees with what you wrote is a defect, not a rounding.** The
+same run reported `roles_out: 48` where 47 had been written, because one job
+title contained a `|` — the separator for A4's numbered columns, and nothing
+distinguishes it from a `|` inside a value. `Work Modes` has the same trap with
+`;`, which is what `MULTI_VALUE_SPEC` exists for. Compare `roles_out` and
+`companies_out` against your own TSV before staging.
+
+**`append --dry-run` first, and read `deferred_detail`.** A `similar_name`
+deferral is a question, not a failure — it names a company the ladder would not
+merge on its own, and answering it is one row in `company-aliases.csv`, where the
+next run inherits it. On 2026-09-24 it held back PwC Italy, Accenture Italia and
+Prada, and deferring them was right: each Master edition gets its own folder and
+its own contact history, so a duplicate row reading `New job found` would have
+erased work somebody had already done in it.
 
 ## The A1–A4 method
 
@@ -167,6 +199,8 @@ These are A1/A4 rules expressed as code. Changing one means changing a rule, so 
 - **A1 §44 is a gate, not a deduction.** An inadmissible role is excluded before a label is ever assigned — `excluded`, with the ground that fired. Scoring it down instead is how a senior or closed post reached `kept` whenever `topK` was not tight. The grounds are `senior-without-stage`, `fully-remote`, `closed-ad`, `mandatory-language`; `sede fuori dai limiti` is `geo.ts`'s and is not duplicated here.
 - **An undeclared field never excludes.** A1 §46, and the reason `admissibility.ts` takes optional inputs and `to_verify` is a value rather than a blank. The gate fires on declarations only.
 - **An aggregator is never an employer.** A board or agency in `company` breaks grouping and history dedup, both of which are per-company. The card goes to `unresolved` with the board recorded as `poster` — the bucket is what refuses the attribution, so `company` stays as observed rather than being emptied.
+- **A4 §9 names three dedup keys and only two are merged.** `dedupCards` joins on the normalised URL and the source id; the third — normalised company + title + city — is REPORTED as `nearDuplicates`, because §9 also says "Confermare l'identità prima di fondere record" and two identical titles at one company in one city can be two openings. Measured: Ferrero's "Assistant Chef de produit Glaces" arrived under two LinkedIn ids with identical company, title, city and date, and both reached `Roles.xlsx` until it was caught by eye.
+- **Every card leaves through a named exit, and "merged" is one.** `dedupCards` counted what it merged and `runPipeline` dropped the count, so 2910 of 3681 cards left a real run unaccounted for — 79% of what it read. `counters.merged` closes the identity, and `pipeline-smoke` asserts it.
 - **A rule that lives in the driver dies with the driver.** This is the class the 2026-09-22 run produced twice: the admissibility gate and the aggregator resolution both existed, both were correct, and both lived in `build-tsv.py` outside this repo. The remedy the repo has settled on is a caller — `observe.ts::indeedLine` and `admissibility.ts` each have a `cli.js` subcommand, and `exclude()`/`excludedPerRule` sat dead until `admit` and `discover` called them. When a rule has no execution path, that is the defect, not the documentation.
 - **`Review.xlsx` is the record; nothing is synced into a second one.** Until 2026-09-18 a canonical CSV sat beside it and three commands wrote into it. All three are gone now, along with the CSV: `pull` and `add_verified.py` carried colleagues' decisions into it, and `backfill-ids` maintained its `Company ID` column — every one of them redundant once Review *is* the record. The canonical was deleted the same day — not archived, `git log --diff-filter=D` — after it was measured 62 companies stale. `propose_company_id` stays, because `append` calls it to give a new company an identity.
 - **Column ownership is data, not a comment.** `reconcile.py` declares `HUMAN_COLS`, `MACHINE_UNION_COLS`, `MACHINE_LATEST_COLS`. A column cannot be in two sets, and tests assert that.
