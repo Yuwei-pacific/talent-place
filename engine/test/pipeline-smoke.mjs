@@ -166,6 +166,10 @@ const cfg = {
 // ---------------------------------------------------------------------------
 // 4. Nothing is silently discarded: every card that entered leaves through a
 //    named exit. This is what makes the "declare coverage" duty auditable.
+//
+//    Every new exit path has to be added here, and that is the point of the
+//    assertion rather than an annoyance: a gate that removes cards without a
+//    bucket is exactly how a rule becomes invisible.
 // ---------------------------------------------------------------------------
 {
   const stub = {
@@ -180,7 +184,12 @@ const cfg = {
   };
   const r = await runPipeline([stub], { ...cfg, topK: 1 }, {}, { rates: { stub: 1000 } });
   const accounted =
-    r.kept.length + r.dropped.length + r.droppedNonEu.length + r.duplicates.length;
+    r.kept.length +
+    r.dropped.length +
+    r.droppedNonEu.length +
+    r.unresolved.length +
+    r.excluded.length +
+    r.duplicates.length;
   assert.equal(accounted, r.counters.cardsSeen, `${accounted} != ${r.counters.cardsSeen}: a card left the run through no named exit`);
   assert.equal(r.kept.length, 1, 'topK is honoured');
   assert.equal(r.dropped.length, 1, 'what topK cut is kept, not discarded');
@@ -258,4 +267,111 @@ const cfg = {
   assert.equal(r.report[0].status, 'ok', 'a source that returns exactly cap without stopping itself is ok');
 }
 
-console.log('pipeline-smoke: OK (fan-out, tagging, geo->dedup->prefilter order, no silent loss, source isolation, cap)');
+// ---------------------------------------------------------------------------
+// 7. A1 §Fonti: a board or an agency is a discovery source, never an employer.
+//
+//    These are the 2026-09-22 Accessory design ED.14 collapses, as cards. Note
+//    what dedup can and cannot do here: `leManoosh — CMF Designer Internship`
+//    IS `Italdesign — CMF Designer Internship`, but the two copies carry
+//    different URLs and different company names, so `dedupCards` merges nothing
+//    and only the poster reveals what happened.
+// ---------------------------------------------------------------------------
+{
+  const stub = {
+    id: 'stub',
+    async discover() {
+      return [
+        card({ company: 'Italdesign', sourceJobId: '1', url: 'https://example.com/ital', title: 'CMF Designer Internship' }),
+        card({ company: 'leManoosh', sourceJobId: '2', url: 'https://example.com/leman', title: 'CMF Designer Internship' }),
+        card({ company: 'Miu Miu', sourceJobId: '3', url: 'https://example.com/miu', title: 'Stage Sviluppo Prodotto Calzature' }),
+        card({ company: 'BoF Careers', sourceJobId: '4', url: 'https://example.com/bof1', title: 'Stage Sviluppo Prodotto Calzature' }),
+        card({ company: 'BoF Careers', sourceJobId: '5', url: 'https://example.com/bof2', title: 'Stage PRADA Windows Creative Intern' }),
+      ];
+    },
+  };
+  const r = await runPipeline([stub], { ...cfg, topK: 10 }, {}, { rates: { stub: 1000 } });
+
+  assert.deepEqual(
+    r.unresolved.map((c) => c.company).sort(),
+    ['BoF Careers', 'BoF Careers', 'leManoosh'],
+    'a posting attributed to a board is not attributed to the board',
+  );
+  assert.deepEqual(
+    r.kept.map((c) => c.company).sort(),
+    ['Italdesign', 'Miu Miu'],
+    'the employers on the same run must survive — a flag that catches everything protects nothing',
+  );
+  assert.ok(
+    !r.kept.some((c) => c.company === 'BoF Careers'),
+    'an aggregator must never reach the corpus that becomes Company / Outreach Account',
+  );
+
+  // A1: "l'aggregatore resta registrato come fonte". The board's name is kept
+  // for `Sources / Portals`; `company` is left as observed, because that is the
+  // evidence the agent resolves the real employer against. The BUCKET is what
+  // refuses the attribution — not an emptied field.
+  const bof = r.unresolved.find((c) => c.company === 'BoF Careers');
+  assert.equal(bof.poster, 'BoF Careers', 'the board is recorded as the poster');
+  assert.equal(bof.company, 'BoF Careers', 'and the observed name is not destroyed on the way');
+
+  // Per-entry counts, the `falseFriendHits` remedy: a list that stops firing
+  // says so instead of sitting there looking like cover.
+  assert.equal(r.aggregatorHits['bof careers'], 2);
+  assert.equal(r.aggregatorHits['lemanoosh'], 1);
+  assert.equal(r.aggregatorHits['adecco'], 0, 'an entry that matched nothing reports 0 rather than being absent');
+  assert.equal(r.aggregatorTable.missing, false);
+  assert.equal(r.counters.unresolved, 3);
+}
+
+// ---------------------------------------------------------------------------
+// 8. A1 §44 at the card stage — the two grounds that need no read.
+//
+//    `senior-title` and `closed-signal` used to live in `prefilter` as score
+//    deductions, and a deduction is not a rule: a senior card at base 0.3 lost
+//    0.5 (clamped to 0) but query-term overlap put up to 0.25 back, so it reached
+//    `kept` whenever topK was not tight.
+// ---------------------------------------------------------------------------
+{
+  const stub = {
+    id: 'stub',
+    async discover() {
+      return [
+        card({ company: 'Alpha', sourceJobId: '1', title: 'Service Design Intern' }),
+        card({ company: 'Beta', sourceJobId: '2', url: 'https://example.com/b', title: 'Senior Service Design Manager' }),
+        card({ company: 'Gamma', sourceJobId: '3', url: 'https://example.com/c', title: 'Design Intern', snippet: 'offerta chiusa' }),
+        card({ company: 'Delta', sourceJobId: '4', url: 'https://example.com/d', title: 'Design Intern', workMode: 'fully_remote' }),
+        card({ company: 'Epsilon', sourceJobId: '5', url: 'https://example.com/e', title: 'Design Intern', workMode: 'to_verify' }),
+      ];
+    },
+  };
+  const r = await runPipeline([stub], { ...cfg, topK: 10 }, {}, { rates: { stub: 1000 } });
+
+  assert.deepEqual(
+    r.excluded.map((e) => e.ground).sort(),
+    ['closed-ad', 'fully-remote', 'senior-without-stage'],
+  );
+  assert.deepEqual(
+    r.kept.map((c) => c.company).sort(),
+    ['Alpha', 'Epsilon'],
+    'A1 §47: an undeclared — or explicitly unestablished — work mode must not exclude',
+  );
+  assert.ok(
+    r.excluded.every((e) => e.detail.length > 0),
+    'A4 asks for motivated examples, so every exclusion carries its reason',
+  );
+  assert.ok(
+    !r.kept.some((c) => c.company === 'Beta'),
+    'a senior role must be excluded, not merely scored down',
+  );
+
+  // The exclusions are a DIFFERENT bucket from the geography drop and from the
+  // prefilter drop. A4: "Non confondere escluso per incompatibilità, duplicato
+  // storico e non verificabile: sono esiti diversi."
+  assert.equal(r.droppedNonEu.length, 0, 'nothing was out of geography here');
+  assert.equal(r.counters.excluded, 3);
+}
+
+console.log(
+  'pipeline-smoke: OK (fan-out, tagging, geo->gates->dedup->prefilter order, no silent loss, ' +
+    'source isolation, cap, A1 §Fonti attribution, A1 §44 admissibility)',
+);

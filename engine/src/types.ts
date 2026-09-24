@@ -25,6 +25,16 @@ export interface Card {
   /** Other URLs for the same posting, found by a different query or portal.
    *  Carried rather than discarded so `Roles.xlsx` can show the mirrors. */
   alternateUrls?: string[];
+  /** Work mode as the SOURCE declared it, from the closed set in
+   *  `admissibility.ts`. Absent means undeclared, and A1 §47 keeps an undeclared
+   *  field uncertain rather than excluding on it — which is why this is optional
+   *  and why `to_verify` is a member of the set. */
+  workMode?: WorkMode;
+  /** Set when the poster is not the employer (A1 §Fonti): the board or agency the
+   *  source attributed this posting to. Its presence IS the flag, so no second
+   *  boolean can disagree with it. `company` is left as observed — that name is
+   *  the evidence the agent resolves the real employer against. */
+  poster?: string;
   source: JobSource;
   discoveryQuery: string;
 }

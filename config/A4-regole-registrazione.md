@@ -39,7 +39,7 @@ Le proposte entrano nel bacino da valutare, con `Outreach Decision = Review`, an
 ## Destinazione dei risultati
 
 - **TSV principale:** ruoli ammissibili con descrizione affidabile ed etichetta `pertinente` o `adiacente`. I dubbi su campi non dichiarati restano visibili; l’etichetta non certifica curricularità o idoneità individuale. Un’area A2 da confermare è segnalata come `ipotesi operativa`.
-- **Esclusioni:** ruoli `fuori profilo` o incompatibili con i vincoli applicabili. Non inserirli nel TSV principale o nel relativo Role Count. Mostrare fino a cinque esempi motivati.
+- **Esclusioni:** ruoli `fuori profilo` o incompatibili con i vincoli applicabili. Non inserirli nel TSV principale o nel relativo Role Count. Mostrare fino a cinque esempi motivati. L'incompatibilità si stabilisce su ciò che l'annuncio **dichiara**: modalità di lavoro, stato della candidatura, lingua obbligatoria. Un campo non dichiarato mantiene l'incertezza e non esclude (A1) — un ruolo che nessuno ha potuto confermare resta nel bacino da valutare, con il dubbio in evidenza, non fra gli esclusi.
 - **Non risolti:** identità o descrizione non affidabile, oppure luogo non classificabile secondo il formato richiesto. Elencare separatamente URL, informazione mancante e verifica necessaria, senza etichetta di pertinenza o score inventati.
 - **Duplicati storici:** non riproporli come nuove opportunità; contarli nel riepilogo di ricerca, separatamente dagli esclusi e dai non risolti.
 

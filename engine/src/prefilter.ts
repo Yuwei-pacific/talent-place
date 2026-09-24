@@ -2,11 +2,16 @@
 // BEFORE any detail fetch so broad query fan-out stays affordable.
 // Keeps recall: dropped cards stay in the inbox as lead_only, they just don't
 // consume detail/LLM budget.
+//
+// This scores RELEVANCE and nothing else. It used to carry a `senior-title`
+// penalty (-0.5) and a `closed-signal` penalty (-0.6), which were A1 §44's
+// admissibility grounds written as deductions — and a deduction is not a rule.
+// A senior card at base 0.3 lost 0.5 (clamped to 0) but a query-term overlap put
+// up to 0.25 back, so it reached `kept` whenever topK was not tight, and a
+// closed ad only had to outscore its neighbours. Both grounds now exclude, in
+// `admissibility.ts`, before this runs. One rule, one place.
 import type { Card } from './types.js';
-
-const INTERN = /\b(intern|internship|stage|stagista|tirocinio|tirocinante|working student|graduate internship|curricular|praktikant|praktikum|beca|stagiaire)\b/i;
-const SENIOR = /\b(senior|manager|director|head of|vice president|\bvp\b|principal)\b/i;
-const CLOSED = /no longer accepting|this job is closed|offerta chiusa|position filled|scaduto/i;
+import { INTERN_SIGNAL } from './admissibility.js';
 
 export interface PrefilterConfig {
   falseFriends: string[];
@@ -50,20 +55,12 @@ export function prefilter(cards: Card[], config: PrefilterConfig): PrefilterResu
     const hay = hays[idx];
     const reasons: string[] = [];
     let score = 0.3; // base: discovered at all
-    if (INTERN.test(card.title)) {
+    if (INTERN_SIGNAL.test(card.title)) {
       score += 0.3;
       reasons.push('intern-signal-in-title');
-    } else if (INTERN.test(hay)) {
+    } else if (INTERN_SIGNAL.test(hay)) {
       score += 0.15;
       reasons.push('intern-signal-in-snippet');
-    }
-    if (SENIOR.test(card.title) && !INTERN.test(card.title)) {
-      score -= 0.5;
-      reasons.push('senior-title');
-    }
-    if (CLOSED.test(hay)) {
-      score -= 0.6;
-      reasons.push('closed-signal');
     }
     const ffHit = ffRes.find((re) => re.test(hay));
     if (ffHit) {
