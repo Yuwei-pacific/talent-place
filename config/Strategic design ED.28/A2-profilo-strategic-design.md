@@ -41,7 +41,9 @@ La ricerca può esplorare le aree da confermare dichiarandole come ipotesi opera
 
 **Riferimento didattico o progetto di esempio:** Da indicare dal team didattico.
 
-**Termini di ricerca — a cura di Talent Placement:** service design, customer experience, customer journey, clienteling, customer engagement, CX, esperienza cliente
+**Termini di ricerca — a cura di Talent Placement:** service design, customer experience, customer journey
+
+**Termini secondari, non eseguiti di default dal 2026-11-02:** clienteling, customer engagement, CX, esperienza cliente
 
 ### Business / Innovation Strategy
 
@@ -57,7 +59,9 @@ La ricerca può esplorare le aree da confermare dichiarandole come ipotesi opera
 
 **Riferimento didattico o progetto di esempio:** Da indicare dal team didattico.
 
-**Termini di ricerca — a cura di Talent Placement:** business strategy, innovation, strategy, strategic, business model, open innovation, business design, strategic design
+**Termini di ricerca — a cura di Talent Placement:** business strategy, strategy, strategic, open innovation, business design, strategic design
+
+**Termini secondari, non eseguiti di default dal 2026-11-02:** innovation, business model
 
 ### Transformation / Change
 
@@ -73,7 +77,9 @@ La ricerca può esplorare le aree da confermare dichiarandole come ipotesi opera
 
 **Riferimento didattico o progetto di esempio:** Da indicare dal team didattico.
 
-**Termini di ricerca — a cura di Talent Placement:** transformation, change management, process excellence, operating model
+**Termini di ricerca — a cura di Talent Placement:** transformation, operating model
+
+**Termini secondari, non eseguiti di default dal 2026-11-02:** change management, process excellence
 
 ### Product / UX
 
@@ -89,7 +95,9 @@ La ricerca può esplorare le aree da confermare dichiarandole come ipotesi opera
 
 **Riferimento didattico o progetto di esempio:** Da indicare dal team didattico.
 
-**Termini di ricerca — a cura di Talent Placement:** product design, UX, user research, experience designer, design thinking, prototype, prototyping, ricerca utenti
+**Termini di ricerca — a cura di Talent Placement:** product design, user research, experience designer, design thinking
+
+**Termini secondari, non eseguiti di default dal 2026-11-02:** UX, prototype, prototyping, ricerca utenti
 
 ### CRM / Customer Intelligence
 
@@ -105,7 +113,9 @@ La ricerca può esplorare le aree da confermare dichiarandole come ipotesi opera
 
 **Riferimento didattico o progetto di esempio:** Da indicare dal team didattico.
 
-**Termini di ricerca — a cura di Talent Placement:** CRM, customer intelligence, consumer insight, segmentation, analisi clienti
+**Termini di ricerca — a cura di Talent Placement:** CRM, analisi clienti
+
+**Termini secondari, non eseguiti di default dal 2026-11-02:** customer intelligence, consumer insight, segmentation
 
 ### Consulting
 
@@ -121,7 +131,9 @@ La ricerca può esplorare le aree da confermare dichiarandole come ipotesi opera
 
 **Riferimento didattico o progetto di esempio:** Da indicare dal team didattico.
 
-**Termini di ricerca — a cura di Talent Placement:** consulting, consultant, project management, business analyst, miglioramento processi
+**Termini di ricerca — a cura di Talent Placement:** project management, business analyst
+
+**Termini secondari, non eseguiti di default dal 2026-11-02:** consulting, consultant, miglioramento processi
 
 ### Sustainability
 
@@ -137,7 +149,9 @@ La ricerca può esplorare le aree da confermare dichiarandole come ipotesi opera
 
 **Riferimento didattico o progetto di esempio:** Da indicare dal team didattico.
 
-**Termini di ricerca — a cura di Talent Placement:** sustainability, circular economy, energy transition, economia circolare
+**Termini di ricerca — a cura di Talent Placement:** sustainability
+
+**Termini secondari, non eseguiti di default dal 2026-11-02:** circular economy, energy transition, economia circolare
 
 ## AI e dati: impiego trasversale da confermare
 

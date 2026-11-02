@@ -3,6 +3,7 @@
 import type { Card, SourceAdapter, DiscoverContext } from '../types.js';
 import { fetchGuarded } from './http.js';
 import { mapPool, stopSource } from '../ratelimit.js';
+import { loadCheckpoint, recordCheckpoint } from './checkpoint.js';
 
 function decodeEntities(s: string): string {
   return s
@@ -10,7 +11,9 @@ function decodeEntities(s: string): string {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)));
 }
 
 function clean(s: string): string {
@@ -81,8 +84,27 @@ export function parseGuestCards(html: string, discoveryQuery: string): Card[] {
   return cards;
 }
 
-function guestUrl(keywords: string, location: string, start: number, base: string): string {
+/** The description block of a guest `jobPosting` page, as text, and whether the page
+ *  says the role has closed. `html` is one job's page and only this one block is read,
+ *  or the surrounding chrome comes with it. */
+export function parsePosting(html: string): { desc: string; closed: boolean } {
+  const closed = /No longer accepting applications/.test(html);
+  const block = html.match(/show-more-less-html__markup[^>]*>([\s\S]*?)<\/div>/)?.[1];
+  if (!block) return { desc: '', closed };
+  const desc = decodeEntities(
+    block
+      .replace(/<(br|\/p|\/li|\/h\d)[^>]*>/g, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' '),
+  )
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+  return { desc, closed };
+}
+
+function guestUrl(keywords: string, location: string, start: number, base: string, recencyDays?: number): string {
   const q = new URLSearchParams({ keywords, location, start: String(start) });
+  if (recencyDays !== undefined) q.set('f_TPR', `r${recencyDays * 86400}`);
   return `${base}/jobs-guest/jobs/api/seeMoreJobPostings/search?${q.toString()}`;
 }
 
@@ -103,10 +125,21 @@ function linkedinLocation(location: string): string {
 
 export function linkedinGuestAdapter(
   locations: string[],
-  opts: { baseUrl?: string; width?: number } = {},
+  opts: {
+    baseUrl?: string;
+    width?: number;
+    /** Ask the server for postings this recent, so a request stops paying for cards
+     *  the run would discard. The experience and job-type filters are not used here:
+     *  on 2026-11-02 `f_JT=I` returned Senior ESG Consultants. */
+    recencyDays?: number;
+    /** File of finished pairs. Those in it are not asked for again. */
+    checkpoint?: string;
+  } = {},
 ): SourceAdapter {
   const base = opts.baseUrl ?? 'https://www.linkedin.com';
   const width = opts.width ?? 4;
+  const { recencyDays, checkpoint } = opts;
+  if (recencyDays !== undefined && !(recencyDays > 0)) throw new RangeError(`recencyDays must be > 0, got ${recencyDays}`);
   // A Set because every request is budget: on 2026-11-02 the source was stopped
   // after 25, so the same place written twice must not be searched twice.
   const places = [...new Set(locations.map(linkedinLocation))];
@@ -116,6 +149,7 @@ export function linkedinGuestAdapter(
     workModeUndeclarable: ['linkedin-guest'],
     async discover(queries: string[], ctx: DiscoverContext): Promise<Card[]> {
       const pairs = queries.flatMap((q) => places.map((loc) => ({ q, loc })));
+      const finished = checkpoint ? loadCheckpoint(checkpoint) : new Map<string, Card[]>();
       let collected = 0;
       // Pooled rather than serial: the limiter, not the loop, is the pacing
       // knob, so overlapping the round-trips hides latency without raising the
@@ -123,14 +157,21 @@ export function linkedinGuestAdapter(
       // array from parallel workers would make card order nondeterministic and
       // every downstream diff noisy.
       const perPair = await mapPool(pairs, width, async ({ q, loc }) => {
+        const key = `${q} — ${loc} — ${recencyDays ?? ''}`;
+        const known = finished.get(key);
+        if (known) {
+          collected += known.length;
+          return known;
+        }
         if (ctx.stop.stopped || collected >= ctx.cap) return [] as Card[];
         // Was `throw new Error(...)` on any non-gone failure, so a single 403
         // or 429 aborted every remaining query and lost the whole source's
         // output. Every other adapter continues; this one now does too, and the
         // StopToken decides when the source is genuinely finished.
-        const res = await fetchGuarded(guestUrl(q, loc, 0, base), ctx.guard);
+        const res = await fetchGuarded(guestUrl(q, loc, 0, base, recencyDays), ctx.guard);
         if (!res.ok) return [] as Card[];
         const cards = parseGuestCards(res.text, `${q} — ${loc}`);
+        if (checkpoint) recordCheckpoint(checkpoint, key, cards);
         collected += cards.length;
         if (collected >= ctx.cap) stopSource(ctx.stop, 'cap', `cap ${ctx.cap} reached`);
         return cards;

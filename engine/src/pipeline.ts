@@ -43,6 +43,13 @@ export interface PipelineConfig {
   aggregators?: string;
   rates?: Record<string, number>;
   cap?: number;
+  /** LinkedIn only: ask the server for postings this many days old at most. */
+  recencyDays?: number;
+  /** LinkedIn only: at the 429 limit, wait this long and carry on rather than stop.
+   *  Absent means the run stops there, as it always has. */
+  cooldownMinutes?: number;
+  /** How many of those waits one run may take. Default 12. */
+  maxCooldowns?: number;
 }
 
 export interface TaggedCard extends Card {
@@ -197,6 +204,9 @@ export async function runPipeline(
   const { cards, report } = await runDiscovery(adapters, queries, {
     cap: cfg.cap ?? DEFAULT_CAP,
     rates: cfg.rates,
+    ...(cfg.cooldownMinutes
+      ? { cooldowns: { 'linkedin-guest': { ms: cfg.cooldownMinutes * 60000, max: cfg.maxCooldowns ?? 12 } } }
+      : {}),
     ...runOpts,
   });
 

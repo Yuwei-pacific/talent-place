@@ -90,6 +90,22 @@ npm run build && node lib/cli.js admit --fields <run dir>/declared.json --out <r
 
 `run-report.json` records per-source `requests / ok / 429 / 403 / stop_kind / reason`. That is the A1 "declare the reason" duty as data rather than prose.
 
+### A run nobody has to watch
+
+LinkedIn's guest API began answering 429 after about 20 requests in late October, on either pace tried and on two networks, and answers again within minutes. Three fields in the run config and one command make that a wait rather than an end:
+
+```bash
+# run.json: "recencyDays": 7, "cooldownMinutes": 20, "maxCooldowns": 12
+caffeinate -i npm run discover -- --config <run.json> --out <dir> --history <csv>
+node lib/cli.js read --cards <shortlist.json> --out <dir> --cooldown-minutes 20
+```
+
+- `recencyDays` sends LinkedIn's `f_TPR`, which works on the guest endpoint. `f_JT=I` does **not**: on 2026-11-02 it returned Senior ESG Consultants, so `stage` and `internship` are still separate queries.
+- `cooldownMinutes` waits at the 429 limit and retries the same query, so nothing is lost. Without it the source stops at the limit, as it always did. A 403, or a wait followed by no success at all, still ends the source: waiting is allowed, pushing is not.
+- `discover` appends each finished query to `<dir>/checkpoint.jsonl`. `--resume` continues from it, and without `--resume` an existing checkpoint is refused, so two runs cannot mix.
+- `read` replaces the run-directory `fetch-descriptions.py`. It keeps what `descriptions.json` already holds, and `read-report.json` carries the same health record as a source.
+- `health.events429` says when each 429 came. The 2026-11-02 run could not tell one long block from several short ones because nothing recorded it. It does not record the network, and two networks gave different counts.
+
 ### Verifying, before reaching for a browser
 
 ```bash

@@ -228,10 +228,39 @@ export interface SourceHealth {
   errors: number;
   /** Consecutive transport errors, reset by any success. */
   consecutiveErrors: number;
+  /** Cooldowns taken; see `Cooldown`. */
+  cooldowns: number;
+  /** When each 429 arrived. The 2026-11-02 run could not say whether its blocks
+   *  were one long refusal or several short ones, because nothing recorded this. */
+  events429: string[];
 }
 
 export function newSourceHealth(): SourceHealth {
-  return { requests: 0, ok: 0, blocked429: 0, blocked403: 0, gone: 0, errors: 0, consecutiveErrors: 0 };
+  return { requests: 0, ok: 0, blocked429: 0, blocked403: 0, gone: 0, errors: 0, consecutiveErrors: 0, cooldowns: 0, events429: [] };
+}
+
+/**
+ * Wait instead of stopping when a source has said 429 `max429` times.
+ *
+ * LinkedIn's guest API began refusing after about 20 requests in late October, while
+ * answering again within minutes. A run that stops there sends the rest of its queries
+ * only when somebody comes back to restart it. This only ever adds waiting, and it
+ * applies to 429 alone: a 403 still ends the source at once, and so does a wait that
+ * buys no success at all, because at that point pressing on would be the pushing A1
+ * forbids. `max` bounds how long a run can sit there.
+ */
+export interface Cooldown {
+  ms: number;
+  max: number;
+  used: number;
+  /** The 429 total when the last wait began; `max429` counts from here. */
+  base429: number;
+  /** The success total when the last wait began. */
+  okAtLast: number;
+}
+
+export function newCooldown(ms: number, max: number): Cooldown {
+  return { ms, max, used: 0, base429: 0, okAtLast: 0 };
 }
 
 export interface Guard {
@@ -244,6 +273,8 @@ export interface Guard {
   max429?: number;
   /** Consecutive transport errors before the source stops. Default 8. */
   maxConsecutiveErrors?: number;
+  /** Absent means the source stops at `max429`. */
+  cooldown?: Cooldown;
   /** Test seam. */
   random?: () => number;
 }

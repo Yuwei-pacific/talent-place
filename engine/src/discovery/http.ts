@@ -152,13 +152,35 @@ export async function fetchGuarded(url: string, g: Guard, timeoutMs = 20000): Pr
       g.health.blocked429++;
       // Retry-After is the operator's own instruction — obey it verbatim. It is
       // the only adaptivity this engine allows, and it can only slow us down.
+      g.health.events429.push(new Date().toISOString());
       const wait = res.retryAfterMs ?? backoffMs(attempt, random);
       g.limiter.penalize(wait);
-      if (g.health.blocked429 >= max429) {
-        stopSource(g.stop, 'blocked', `${g.health.blocked429} x HTTP 429 on ${hostOf(url)}`);
-        return res;
+      const cooldown = g.cooldown;
+      if (g.health.blocked429 - (cooldown?.base429 ?? 0) >= max429) {
+        const host = hostOf(url);
+        if (!cooldown) {
+          stopSource(g.stop, 'blocked', `${g.health.blocked429} x HTTP 429 on ${host}`);
+          return res;
+        }
+        if (cooldown.used > 0 && g.health.ok === cooldown.okAtLast) {
+          stopSource(g.stop, 'blocked', `${g.health.blocked429} x HTTP 429 on ${host}, no success since the last cooldown`);
+          return res;
+        }
+        if (cooldown.used >= cooldown.max) {
+          stopSource(g.stop, 'blocked', `${g.health.blocked429} x HTTP 429 on ${host} after ${cooldown.used} cooldowns`);
+          return res;
+        }
+        cooldown.used++;
+        cooldown.base429 = g.health.blocked429;
+        cooldown.okAtLast = g.health.ok;
+        g.health.cooldowns++;
+        g.limiter.penalize(cooldown.ms);
+        attempt = -1;
+        continue;
       }
-      if (attempt < maxRetries) continue;
+      // With a cooldown this URL is never given up on: the wait comes to it instead,
+      // and a query dropped here would be coverage lost with no one to notice.
+      if (attempt < maxRetries || cooldown) continue;
       return res; // gave up on this URL; the source continues at the slower rate
     }
 

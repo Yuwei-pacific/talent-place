@@ -26,7 +26,7 @@
 // ../ratelimit.ts for why that absence is load-bearing.
 import type { Card, SourceAdapter } from '../types.js';
 import type { Guard, SourceHealth, StopKind } from '../ratelimit.js';
-import { RateLimiter, mapPool, newSourceHealth, newStopToken, stopSource } from '../ratelimit.js';
+import { RateLimiter, mapPool, newCooldown, newSourceHealth, newStopToken, stopSource } from '../ratelimit.js';
 import { linkedinGuestAdapter } from './linkedin-guest.js';
 import { atsAdapter, type AtsBoard } from './ats.js';
 
@@ -75,6 +75,8 @@ export interface RunOptions {
    *  cannot raise any single source's request rate — it only stops a slow
    *  source from idling the ones behind it. Default 3. */
   sourceWidth?: number;
+  /** Per source: wait this long and carry on rather than stop at the 429 limit. */
+  cooldowns?: Record<string, { ms: number; max: number }>;
   /** Test seam: build a source's guard yourself. */
   guardFor?: (id: string, limiter: RateLimiter) => Guard;
 }
@@ -120,7 +122,13 @@ export async function runDiscovery(
     const limiter = new RateLimiter({ ratePerSec: opts.rates?.[adapter.id] ?? DEFAULT_RATES[adapter.id] ?? 1 });
     const stop = newStopToken();
     const health = newSourceHealth();
-    const guard: Guard = opts.guardFor?.(adapter.id, limiter) ?? { limiter, stop, health };
+    const wait = opts.cooldowns?.[adapter.id];
+    const guard: Guard = opts.guardFor?.(adapter.id, limiter) ?? {
+      limiter,
+      stop,
+      health,
+      ...(wait ? { cooldown: newCooldown(wait.ms, wait.max) } : {}),
+    };
     const t0 = Date.now();
     let got: Card[] = [];
     try {
@@ -167,12 +175,18 @@ export function defaultAdapters(opts: {
   linkedinLocations: string[];
   /** Test/ops seam: point the adapter at a local server instead of linkedin.com. */
   linkedinBaseUrl?: string;
+  linkedinRecencyDays?: number;
+  linkedinCheckpoint?: string;
   /** Employer boards to poll. Absent or empty means no `ats` source at all,
    *  rather than a source that runs and finds nothing. */
   atsBoards?: AtsBoard[];
 }): SourceAdapter[] {
   const adapters: SourceAdapter[] = [
-    linkedinGuestAdapter(opts.linkedinLocations, { baseUrl: opts.linkedinBaseUrl }),
+    linkedinGuestAdapter(opts.linkedinLocations, {
+      baseUrl: opts.linkedinBaseUrl,
+      recencyDays: opts.linkedinRecencyDays,
+      checkpoint: opts.linkedinCheckpoint,
+    }),
   ];
   if (opts.atsBoards?.length) adapters.push(atsAdapter(opts.atsBoards));
   return adapters;
