@@ -9,6 +9,7 @@ own name contains TEST, and it never reads or prints a cell of Review.xlsx.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import platform
@@ -54,6 +55,15 @@ DEFAULT_LINKEDIN = "https://www.linkedin.com"
 DEFAULT_EMPLOYER = "https://www.re-lab.it/career-archive/career-single?career=service-design-intern-157064"
 SEARCH_PATH = "/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=design+internship&location=Milan&start=0"
 RETRY_AFTER_MINUTES = 20
+# The engine's HTTP stack is Node's fetch, which does not read the proxy variables
+# urllib does, so reaching a page from Python says nothing about the engine.
+NODE_FETCH = (
+    "fetch(process.argv[1],{headers:JSON.parse(process.argv[2])})"
+    ".then(r=>console.log(r.status))"
+    ".catch(e=>{console.error(String(e.cause||e));process.exit(1)})"
+)
+# An answer of any kind proves the network works; these are the ways of getting none.
+NOT_REACHED = ("network_error", "allowlist_blocked", "no_node")
 
 
 def engine_dir() -> Path:
@@ -89,9 +99,13 @@ def record(master: Path, test_id: str, status: str, detail: dict) -> None:
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "detail": detail,
     }
-    with open(master / "probe-report.jsonl", "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    # Printed first: an unwritable folder is one of the things being tested.
     print(f"{test_id} {status} {json.dumps(detail, ensure_ascii=False)}", flush=True)
+    try:
+        with open(master / "probe-report.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        print(f"{test_id}: this result could not be saved ({type(exc).__name__}): copy it from here", flush=True)
 
 
 def run_tool(cmd: list[str], env: dict | None = None) -> tuple[int | None, str]:
@@ -176,15 +190,35 @@ def check_folders(master: Path, config: Path) -> None:
         marker.write_text("Check that this file appears on OneDrive.\n", encoding="utf-8")
     except OSError as exc:
         write_error = f"{type(exc).__name__}: {exc}"
-    detail = {"config_unreadable": unreadable, "marker": marker.name, "write_error": write_error}
-    record(master, "T4", "FAIL" if unreadable or write_error else "PASS", detail)
+    # Phase 2 edits A2 and A3 there. Asked, not tried: only a TEST folder is written to.
+    config_writable = os.access(config, os.W_OK)
+    detail = {
+        "config_unreadable": unreadable,
+        "config_writable": config_writable,
+        "marker": marker.name,
+        "write_error": write_error,
+    }
+    record(master, "T4", "FAIL" if unreadable or write_error or not config_writable else "PASS", detail)
+
+
+def has_review_columns(review: Path) -> bool:
+    """Can the full run export this workbook? Reads the header row and nothing below it."""
+    import sync_export
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(review, read_only=True)
+    try:
+        header_rows = workbook.worksheets[0].iter_rows(min_row=2, max_row=2, values_only=True)
+        return set(sync_export.REVIEW_COLUMNS) <= set(next(header_rows, ()))
+    finally:
+        workbook.close()
 
 
 def check_writes(master: Path) -> None:
     engine_python_dir()
     import synced_fs
 
-    detail: dict = {}
+    detail: dict = {"ready_for_full_run": False}
     try:
         synced_fs.write_atomically(
             master / "probe-atomic.txt", lambda tmp: tmp.write_text("atomic\n", encoding="utf-8")
@@ -207,6 +241,7 @@ def check_writes(master: Path) -> None:
             workbook = load_workbook(review)
             synced_fs.write_atomically(master / "probe-roundtrip.xlsx", lambda tmp: workbook.save(tmp))
             detail["roundtrip"] = "ok"
+            detail["ready_for_full_run"] = has_review_columns(review)
         except Exception as exc:
             detail["roundtrip"] = f"{type(exc).__name__}: {exc}"
 
@@ -271,7 +306,8 @@ def classify_response(status: int | None, body: str, error: str | None) -> str:
     """Why a page came back as it did. A 403 from the sandbox's own proxy and a 403
     from the site are different problems with different owners, so they stay apart."""
     if error is not None or status is None:
-        return "network_error"
+        # A proxy refuses an HTTPS request at CONNECT, so no response body ever arrives.
+        return "allowlist_blocked" if error and "Tunnel connection failed: 403" in error else "network_error"
     if status == 429:
         return "rate_limited"
     if status == 403:
@@ -282,45 +318,128 @@ def classify_response(status: int | None, body: str, error: str | None) -> str:
     return "ok" if 200 <= status < 300 else "http_error"
 
 
-def fetch(url: str) -> tuple[str, str]:
-    """(classification, body). Never raises for anything the network can do."""
+def fetch(url: str) -> dict:
+    """{kind, body, status, error}. Never raises for anything the network can do."""
     request = urllib.request.Request(url, headers=HEADERS)
     try:
         with urllib.request.urlopen(request, timeout=25) as res:
             body = res.read().decode("utf-8", "replace")
-            return classify_response(res.status, body, None), body
+            status = res.status
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")
-        return classify_response(exc.code, body, None), body
-    except (OSError, ValueError) as exc:
-        return classify_response(None, "", f"{type(exc).__name__}: {exc}"), ""
+        status = exc.code
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        return {"kind": classify_response(None, "", error), "body": "", "status": None, "error": error}
+    return {"kind": classify_response(status, body, None), "body": body, "status": status, "error": None}
+
+
+def fetch_with_node(url: str) -> dict:
+    """The same request through the HTTP stack the engine actually uses."""
+    node = shutil.which("node")
+    if not node:
+        return {"kind": "no_node", "status": None, "error": "node not found"}
+    code, output = run_tool([node, "-e", NODE_FETCH, url, json.dumps(HEADERS)])
+    answered = re.findall(r"(?m)^(\d{3})$", output)
+    if code == 0 and answered:
+        status = int(answered[-1])
+        return {"kind": classify_response(status, "", None), "status": status, "error": None}
+    error = output.strip()[:300]
+    return {"kind": classify_response(None, "", error), "status": None, "error": error}
 
 
 def cmd_net(args: argparse.Namespace) -> None:
     master = require_test_folder(args.master)
     base = args.linkedin_base.rstrip("/")
-    detail: dict = {"posting": "skipped"}
+    detail: dict = {"posting": "skipped", "statuses": {}, "errors": {}}
+
+    def note(name: str, answer: dict) -> str:
+        detail["statuses"][name] = answer["status"]
+        if answer["error"]:
+            detail["errors"][name] = answer["error"]
+        detail[name] = answer["kind"]
+        return answer["kind"]
 
     # At most two requests to LinkedIn, and none after it has said 429.
-    search, page = fetch(base + SEARCH_PATH)
-    job_id = re.search(r"urn:li:jobPosting:(\d+)", page) if search == "ok" else None
-    detail["search"] = "no_cards" if search == "ok" and not job_id else search
+    search = fetch(base + SEARCH_PATH)
+    note("search", search)
+    job_id = re.search(r"urn:li:jobPosting:(\d+)", search["body"]) if search["kind"] == "ok" else None
+    if search["kind"] == "ok" and not job_id:
+        detail["search"] = "no_cards"
     if job_id:
         time.sleep(args.pause)
-        posting, page = fetch(f"{base}/jobs-guest/jobs/api/jobPosting/{job_id.group(1)}")
-        has_text = "show-more-less-html__markup" in page
-        detail["posting"] = "no_description" if posting == "ok" and not has_text else posting
+        posting = fetch(f"{base}/jobs-guest/jobs/api/jobPosting/{job_id.group(1)}")
+        note("posting", posting)
+        if posting["kind"] == "ok" and "show-more-less-html__markup" not in posting["body"]:
+            detail["posting"] = "no_description"
 
-    detail["employer"] = fetch(args.employer_url)[0]
+    note("employer", fetch(args.employer_url))
+    note("engine_http", fetch_with_node(args.employer_url))
 
-    if "rate_limited" in (detail["search"], detail["posting"]):
+    if detail["employer"] in NOT_REACHED or detail["engine_http"] in NOT_REACHED:
+        status = "FAIL"
+    elif "rate_limited" in (detail["search"], detail["posting"]):
         detail["retry_after_minutes"] = RETRY_AFTER_MINUTES
         status = "INCONCLUSIVE"
-    elif all(detail[key] == "ok" for key in ("search", "posting", "employer")):
+    elif detail["search"] == "ok" and detail["posting"] == "ok":
         status = "PASS"
     else:
         status = "FAIL"
     record(master, "T3", status, detail)
+
+
+def cmd_longrun(args: argparse.Namespace) -> None:
+    """Can one command run for hours here? A finish row says it did. A start row with
+    no finish says it was killed, and the last heartbeat says when; a large gap between
+    heartbeats says the computer slept and the command survived it."""
+    master = require_test_folder(args.master)
+    command = [part for part in args.command if part != "--"] if args.command else []
+    if not command and args.seconds is None:
+        print("REFUSED: give --seconds or a command after --", file=sys.stderr)
+        raise SystemExit(2)
+
+    run_dir = master / "_probe-run"
+    run_dir.mkdir(exist_ok=True)
+    heartbeat = run_dir / f"longrun-{args.label}.heartbeat"
+    record(master, f"T6-{args.label}-start", "INCONCLUSIVE", {"command": command[:2], "seconds": args.seconds})
+
+    started = last = time.time()
+    max_gap = 0.0
+    process = None
+    with open(run_dir / f"longrun-{args.label}.log", "a", encoding="utf-8") as log:
+        if command:
+            try:
+                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+            except OSError as exc:
+                detail = {"exit_code": None, "error": f"{type(exc).__name__}: {exc}"}
+                record(master, f"T6-{args.label}", "FAIL", detail)
+                return
+        while True:
+            now = time.time()
+            max_gap = max(max_gap, now - last)
+            last = now
+            with open(heartbeat, "a", encoding="utf-8") as fh:
+                fh.write(datetime.now(timezone.utc).isoformat(timespec="seconds") + "\n")
+            if process is not None:
+                if process.poll() is not None:
+                    break
+                try:
+                    process.wait(timeout=args.heartbeat)
+                except subprocess.TimeoutExpired:
+                    pass
+            else:
+                remaining = started + args.seconds - now
+                if remaining <= 0:
+                    break
+                time.sleep(min(args.heartbeat, remaining))
+
+    exit_code = process.returncode if process is not None else 0
+    detail = {
+        "exit_code": exit_code,
+        "elapsed_seconds": round(time.time() - started, 1),
+        "max_gap_seconds": round(max_gap, 1),
+    }
+    record(master, f"T6-{args.label}", "PASS" if exit_code == 0 else "FAIL", detail)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -347,6 +466,14 @@ def build_parser() -> argparse.ArgumentParser:
     state.add_argument("--master", required=True)
     state.add_argument("--label", required=True, choices=LABELS)
     state.set_defaults(func=cmd_state)
+
+    longrun = sub.add_parser("longrun", help="T6: run a command or a timer, and record whether it survives")
+    longrun.add_argument("--master", required=True)
+    longrun.add_argument("--label", required=True)
+    longrun.add_argument("--seconds", type=float)
+    longrun.add_argument("--heartbeat", type=float, default=60.0)
+    longrun.add_argument("command", nargs=argparse.REMAINDER)
+    longrun.set_defaults(func=cmd_longrun)
     return parser
 
 

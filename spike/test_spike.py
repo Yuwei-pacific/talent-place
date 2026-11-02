@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import zipfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -287,6 +288,288 @@ class TestNet(ProbeCase):
         self.assertEqual(row["detail"]["search"], "network_error")
 
 
+class RefusingProxy:
+    """What a Cowork allowlist reportedly does: answers CONNECT with 403 and a header."""
+
+    def __init__(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_CONNECT(self):
+                self.send_response(403)
+                self.send_header("X-Proxy-Error", "blocked-by-allowlist")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_port}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class TestNetFindings(ProbeCase):
+    def run_net(self, web, **env):
+        res = run_probe(
+            "net", "--master", self.master, "--linkedin-base", web.base,
+            "--employer-url", f"{web.base}/employer", "--pause", "0", env=env,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return report(self.master)["T3"]
+
+    def test_connect_403_is_allowlist_with_raw_error(self):
+        proxy = RefusingProxy()
+        self.addCleanup(proxy.close)
+        res = run_probe(
+            "net", "--master", self.master, "--linkedin-base", "https://www.linkedin.invalid",
+            "--employer-url", "https://employer.invalid/", "--pause", "0",
+            env={"https_proxy": proxy.url, "no_proxy": ""},
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        row = report(self.master)["T3"]
+        self.assertEqual(row["status"], "FAIL")
+        self.assertEqual(row["detail"]["search"], "allowlist_blocked")
+        self.assertIn("Tunnel connection failed: 403", row["detail"]["errors"]["search"])
+
+    def test_engine_stack_is_measured_separately(self):
+        web = FakeWeb(GOOD_ROUTES)
+        self.addCleanup(web.close)
+        row = self.run_net(web)
+        self.assertEqual(row["status"], "PASS", row)
+        self.assertEqual(row["detail"]["engine_http"], "ok")
+        self.assertEqual(row["detail"]["statuses"]["engine_http"], 200)
+
+    def test_python_reaching_it_is_not_enough(self):
+        # urllib can pass while the engine's own HTTP stack cannot leave at all.
+        web = FakeWeb(GOOD_ROUTES)
+        self.addCleanup(web.close)
+        empty = self.root / "no-node"
+        empty.mkdir()
+        row = self.run_net(web, PATH=str(empty))
+        self.assertEqual(row["status"], "FAIL", row)
+        self.assertEqual(row["detail"]["engine_http"], "no_node")
+
+    def test_closed_employer_page_still_proves_reachability(self):
+        web = FakeWeb({k: v for k, v in GOOD_ROUTES.items() if k != "/employer"})
+        self.addCleanup(web.close)
+        row = self.run_net(web)
+        self.assertEqual(row["status"], "PASS", row)
+        self.assertEqual(row["detail"]["statuses"]["employer"], 404)
+
+    def test_employer_rate_limit_is_not_a_failure(self):
+        web = FakeWeb({**GOOD_ROUTES, "/employer": (429, "slow down")})
+        self.addCleanup(web.close)
+        self.assertEqual(self.run_net(web)["status"], "PASS")
+
+    def test_status_of_each_page_is_recorded(self):
+        web = FakeWeb({**GOOD_ROUTES, "/jobs-guest/jobs/api/seeMoreJobPostings/search": (999, "no")})
+        self.addCleanup(web.close)
+        row = self.run_net(web)
+        self.assertEqual(row["status"], "FAIL")
+        self.assertEqual(row["detail"]["statuses"]["search"], 999)
+
+    def test_truncated_response_is_recorded_not_a_crash(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "1000")
+                self.end_headers()
+                self.wfile.write(b"short")
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = f"http://127.0.0.1:{server.server_port}"
+        res = run_probe(
+            "net", "--master", self.master, "--linkedin-base", base,
+            "--employer-url", f"{base}/e", "--pause", "0",
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(report(self.master)["T3"]["detail"]["search"], "network_error")
+
+
+@unittest.skipIf(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0), "needs POSIX permissions")
+class TestUnwritable(ProbeCase):
+    def test_result_survives_an_unwritable_folder(self):
+        os.chmod(self.master, 0o555)
+        try:
+            res = run_probe("env", "--master", self.master)
+        finally:
+            os.chmod(self.master, 0o755)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("T2 ", res.stdout)
+        self.assertIn("could not be saved", res.stdout)
+
+    def test_read_only_config_fails_t4(self):
+        self.make_review()
+        os.chmod(self.config, 0o555)
+        try:
+            run_probe("fs", "--master", self.master, "--config", self.config)
+        finally:
+            os.chmod(self.config, 0o755)
+        row = report(self.master)["T4"]
+        self.assertEqual(row["status"], "FAIL")
+        self.assertFalse(row["detail"]["config_writable"])
+
+
+class TestLongRun(ProbeCase):
+    def test_timer_records_start_and_finish(self):
+        res = run_probe("longrun", "--master", self.master, "--label", "timer", "--seconds", "1", "--heartbeat", "0.2")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        rows = report(self.master)
+        self.assertEqual(rows["T6-timer-start"]["status"], "INCONCLUSIVE")
+        finish = rows["T6-timer"]
+        self.assertEqual(finish["status"], "PASS", finish)
+        self.assertGreaterEqual(finish["detail"]["elapsed_seconds"], 1)
+        self.assertLess(finish["detail"]["max_gap_seconds"], 1)
+        beats = (self.master / "_probe-run" / "longrun-timer.heartbeat").read_text(encoding="utf-8").splitlines()
+        self.assertGreater(len(beats), 1)
+
+    def test_command_exit_code_and_output_are_kept(self):
+        code = "print('hello from the command'); raise SystemExit(3)"
+        res = run_probe(
+            "longrun", "--master", self.master, "--label", "job", "--heartbeat", "0.2", "--", sys.executable, "-c", code,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        row = report(self.master)["T6-job"]
+        self.assertEqual(row["status"], "FAIL")
+        self.assertEqual(row["detail"]["exit_code"], 3)
+        self.assertIn("hello", (self.master / "_probe-run" / "longrun-job.log").read_text(encoding="utf-8"))
+
+    def test_a_killed_run_leaves_a_start_and_no_finish(self):
+        proc = subprocess.Popen(
+            [sys.executable, str(PROBE), "longrun", "--master", str(self.master), "--label", "killed",
+             "--seconds", "60", "--heartbeat", "0.1"],
+            stdout=subprocess.DEVNULL,
+        )
+        heartbeat = self.master / "_probe-run" / "longrun-killed.heartbeat"
+        for _ in range(100):
+            if heartbeat.exists() and heartbeat.read_text(encoding="utf-8").strip():
+                break
+            time.sleep(0.1)
+        proc.kill()
+        proc.wait()
+        rows = report(self.master)
+        self.assertIn("T6-killed-start", rows)
+        self.assertNotIn("T6-killed", rows)
+        self.assertTrue(heartbeat.read_text(encoding="utf-8").strip())
+
+    def test_nothing_to_run_is_refused(self):
+        res = run_probe("longrun", "--master", self.master, "--label", "none")
+        self.assertEqual(res.returncode, 2)
+
+    def test_refuses_non_test_folder(self):
+        real = self.root / "Strategic design ED.28"
+        real.mkdir()
+        res = run_probe("longrun", "--master", real, "--label", "x", "--seconds", "1")
+        self.assertEqual(res.returncode, 2)
+        self.assertEqual(list(real.iterdir()), [])
+
+
+class TestReviewShape(ProbeCase):
+    def real_shape_review(self):
+        """A workbook with the live columns, built by the engine from the checked-in fixture."""
+        target = self.root / "real"
+        fixture = HERE.parent / "engine" / "test" / "fixtures" / "strategic-design-history.csv"
+        sync_export = HERE.parent / "engine" / "python" / "sync_export.py"
+        res = subprocess.run(
+            [sys.executable, str(sync_export), "init-review", "--dir", str(target), "--history", str(fixture)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return target / "Review.xlsx"
+
+    def test_blank_workbook_is_named_as_not_ready_for_t6(self):
+        self.make_review()
+        run_probe("fs", "--master", self.master, "--config", self.config)
+        detail = report(self.master)["T5-write"]["detail"]
+        self.assertEqual(detail["ready_for_full_run"], False)
+
+    def test_test_copy_blanks_contacts_and_still_exports(self):
+        from openpyxl import load_workbook
+
+        source = self.real_shape_review()
+        script = HERE / "make_test_copy.py"
+        res = subprocess.run(
+            [sys.executable, str(script), "--from", str(source), "--to", str(self.master)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+        sheet = load_workbook(self.master / "Review.xlsx").worksheets[0]
+        header = {cell.value: cell.column for cell in sheet[2]}
+        for name in ("Contact Name", "Contact Role", "Contact Email / LinkedIn", "Notes"):
+            values = [sheet.cell(row=r, column=header[name]).value for r in range(3, sheet.max_row + 1)]
+            self.assertTrue(all(v is None for v in values), name)
+        companies = [sheet.cell(row=r, column=header["Company / Outreach Account"]).value for r in range(3, sheet.max_row + 1)]
+        self.assertTrue(any(companies))
+
+        run_probe("fs", "--master", self.master, "--config", self.config)
+        self.assertEqual(report(self.master)["T5-write"]["detail"]["ready_for_full_run"], True)
+
+        sync_export = HERE.parent / "engine" / "python" / "sync_export.py"
+        out = self.master / "_probe-run" / "history.csv"
+        res = subprocess.run(
+            [sys.executable, str(sync_export), "export-history", "--dir", str(self.master), "--out", str(out)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+    def test_test_copy_refuses_a_real_folder(self):
+        source = self.real_shape_review()
+        real = self.root / "Strategic design ED.28"
+        real.mkdir()
+        res = subprocess.run(
+            [sys.executable, str(HERE / "make_test_copy.py"), "--from", str(source), "--to", str(real)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(res.returncode, 2)
+        self.assertEqual(list(real.iterdir()), [])
+
+
+class TestInstructions(unittest.TestCase):
+    """The words a colleague and Claude follow are the interface here."""
+
+    skill = (HERE / "windows-probe" / "skills" / "probe" / "SKILL.md").read_text(encoding="utf-8")
+    full_run = (HERE / "windows-probe" / "skills" / "probe" / "references" / "full-run.md").read_text(encoding="utf-8")
+    guide = (HERE / "GUIDA-collega.md").read_text(encoding="utf-8")
+    results = (HERE / "RESULTS-template.md").read_text(encoding="utf-8")
+
+    def test_files_are_kept_offline_before_the_first_test(self):
+        self.assertLess(self.skill.index("Mantieni sempre su questo dispositivo"), self.skill.index(" env --master"))
+        self.assertIn("Mantieni sempre su questo dispositivo", self.guide)
+
+    def test_paths_resolve_where_they_are_used(self):
+        self.assertIn('ENGINE` is `${CLAUDE_SKILL_DIR}/engine', self.skill)
+        self.assertIn("${CLAUDE_SKILL_DIR}/references/full-run.md", self.skill)
+        self.assertNotIn("${CLAUDE_SKILL_DIR}", self.full_run)
+        self.assertNotIn('--master "TEST"', self.skill)
+        self.assertIn("<TEST-folder-path>", self.skill)
+
+    def test_full_run_checks_the_folder_first(self):
+        first = self.full_run.index("REFUSED")
+        self.assertLess(first, self.full_run.index("export-history"))
+
+    def test_long_commands_are_measured_without_polling(self):
+        self.assertIn("longrun", self.full_run)
+        self.assertIn("--seconds 10800", self.full_run)
+        self.assertRegex(self.full_run, r"Do not poll")
+
+    def test_guide_asks_for_everything_t6_produces(self):
+        for name in ("probe-report.jsonl", "run-report.json", "read-report.json", "FOGLIO-risultati.md"):
+            self.assertIn(name, self.guide)
+        self.assertTrue((HERE / "FOGLIO-risultati.md").exists())
+
+    def test_results_say_inconclusive_is_not_a_failure(self):
+        self.assertIn("INCONCLUSIVE", self.results)
+
+
 class TestClassify(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -303,6 +586,8 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(classify(200, "Just a moment...", None), "challenge")
         self.assertEqual(classify(500, "", None), "http_error")
         self.assertEqual(classify(None, "", "timed out"), "network_error")
+        self.assertEqual(classify(None, "", "OSError: Tunnel connection failed: 403 Forbidden"), "allowlist_blocked")
+        self.assertEqual(classify(None, "", "OSError: Tunnel connection failed: 502 Bad Gateway"), "network_error")
 
 
 class TestBuild(unittest.TestCase):

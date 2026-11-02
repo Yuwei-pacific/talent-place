@@ -4,8 +4,9 @@ Questo test serve a capire se la ricerca stage può funzionare sul tuo computer.
 
 ## Cosa ti serve (te lo prepara Yuwei)
 
-- Il tuo account Claude del team e il file `talent-placement-probe.zip`.
+- Il tuo account Claude del team, il file `talent-placement-probe.zip` e il foglio `FOGLIO-risultati.md`.
 - Sul tuo computer, sincronizzate con OneDrive, due cartelle: `talent-place/config` e `jobSearch_outPut/TEST-probe`.
+- Clicca con il tasto destro su `TEST-probe` e scegli **Mantieni sempre su questo dispositivo**. Aspetta che la sincronizzazione finisca.
 
 ## Come si fa
 
@@ -24,9 +25,13 @@ Questo test serve a capire se la ricerca stage può funzionare sul tuo computer.
 
 ## Alla fine
 
-Manda a Yuwei il file `probe-report.jsonl`, che trovi nella cartella `TEST-probe`, e compila il foglio dei risultati.
+Compila `FOGLIO-risultati.md` e manda a Yuwei il foglio e il file `probe-report.jsonl`, che trovi nella cartella `TEST-probe`.
 
-**La prova completa** dura qualche ora e usa parte del tuo credito Claude. Falla solo quando te lo chiede Yuwei, con il computer collegato alla corrente e senza chiuderlo.
+## La prova completa
+
+Dura circa 3 ore e usa parte del tuo credito Claude. Falla solo quando te lo chiede Yuwei: scrivi a Claude «avvia la prova completa». Tieni il computer collegato alla corrente, con l'app Claude aperta. **Non impostare nulla per evitare la sospensione:** se il computer va in sospensione lo vogliamo sapere, quindi scrivilo sul foglio.
+
+Alla fine manda a Yuwei anche `run-report.json` e `read-report.json`, che trovi in `TEST-probe/_probe-run`.
 
 ## Se Cowork non funziona
 
