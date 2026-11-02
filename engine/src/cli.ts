@@ -388,7 +388,7 @@ async function cmdRead(args: Record<string, string>): Promise<number> {
     JSON.stringify({ ...report, stopped: stop.kind, reason: stop.reason, health }, null, 1),
   );
   process.stdout.write(
-    `read ${report.read} new, ${report.alreadyRead} already held, ${report.gone} gone, ${report.unread} unread` +
+    `read ${report.read} new, ${report.empty} empty, ${report.alreadyRead} already held, ${report.gone} gone, ${report.unread} unread` +
       (report.withoutId ? `, ${report.withoutId} without an id` : '') +
       ` (requests ${health.requests}, ok ${health.ok}, 429 ${health.blocked429}, cooldowns ${health.cooldowns})` +
       (stop.reason ? ` — ${stop.reason}` : '') +
