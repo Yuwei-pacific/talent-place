@@ -7,6 +7,7 @@
 import { strict as assert } from 'node:assert';
 import { buildQueries, tagCards, runPipeline } from '../lib/pipeline.js';
 import { runDiscovery } from '../lib/discovery/run.js';
+import { linkedinGuestAdapter } from '../lib/discovery/linkedin-guest.js';
 
 const card = (over) => ({
   title: 'Intern',
@@ -383,32 +384,30 @@ const cfg = {
 //    report, not in the head of whoever happens to open `ats.ts`.
 // ---------------------------------------------------------------------------
 {
-  const stub = { id: 'stub', async discover() { return []; } };
-  const r = await runPipeline(
-    [stub],
-    {
-      ...cfg,
-      atsBoards: [
-        { kind: 'greenhouse', board: 'acme', company: 'Acme' },
-        { kind: 'lever', board: 'beta', company: 'Beta' },
-        { kind: 'greenhouse', board: 'acme2', company: 'Acme2' },
-      ],
-    },
-    {},
-    { rates: { stub: 1000 } },
-  );
-  assert.deepEqual(
-    r.workModeUndeclarable,
-    ['greenhouse'],
-    'only the kinds that cannot declare one, named once each — Lever is not a gap',
-  );
+  const rates = { rates: { stub: 1000, other: 1000, 'linkedin-guest': 1000, ats: 1000 } };
+  const silent = (id, extra = {}) => ({ id, async discover() { return []; }, ...extra });
 
-  const noBoards = await runPipeline([stub], cfg, {}, { rates: { stub: 1000 } });
-  assert.deepEqual(
-    noBoards.workModeUndeclarable,
-    [],
-    'derived from the boards actually configured, so it cannot claim a coverage the run does not have',
+  // The coverage is reported by what ran, named once each, whatever its kind.
+  const r = await runPipeline(
+    [silent('stub', { workModeUndeclarable: ['greenhouse'] }), silent('other', { workModeUndeclarable: ['greenhouse', 'x'] })],
+    cfg,
+    {},
+    rates,
   );
+  assert.deepEqual(r.workModeUndeclarable, ['greenhouse', 'x']);
+
+  // A source that declares everything is not a gap.
+  const clean = await runPipeline([silent('stub', { workModeUndeclarable: [] })], cfg, {}, rates);
+  assert.deepEqual(clean.workModeUndeclarable, []);
+
+  // A source that says nothing cannot claim coverage on its silence.
+  const unsaid = await runPipeline([silent('stub')], cfg, {}, rates);
+  assert.deepEqual(unsaid.workModeUndeclarable, ['stub']);
+
+  // The default source of every run so far. Its guest cards carry no work mode, so
+  // this is the gap the 2026-09-24 run reported as `[]` while `fully-remote` could
+  // not fire on any of its 3681 cards. The real adapter, not a stub.
+  assert.deepEqual(linkedinGuestAdapter(['Milan']).workModeUndeclarable, ['linkedin-guest']);
 }
 
 // ---------------------------------------------------------------------------

@@ -71,6 +71,7 @@ export function atsAdapter(boards: AtsBoard[], opts: { baseUrl?: string } = {}):
 
   return {
     id: 'ats',
+    workModeUndeclarable: [...new Set(boards.filter((b) => !WORK_MODE_DECLARABLE[b.kind]).map((b) => b.kind))],
     async discover(queries: string[], ctx: DiscoverContext): Promise<Card[]> {
       const out: Card[] = [];
       for (const b of boards) {

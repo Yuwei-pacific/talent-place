@@ -55,6 +55,7 @@ const CITY_SLUGS = ['milano', 'roma', 'torino', 'bologna', 'italia'];
 export function cercoLavoroAdapter(): SourceAdapter {
   return {
     id: 'cercolavoro',
+    workModeUndeclarable: ['cercolavoro'],
     async discover(queries: string[], ctx: DiscoverContext): Promise<Card[]> {
       const out: Card[] = [];
       for (const q of queries) {

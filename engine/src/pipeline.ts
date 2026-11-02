@@ -11,7 +11,7 @@
 // between requests were all invented in the moment and discarded with the file.
 import type { Card, SourceAdapter } from './types.js';
 import type { ScoredCard } from './prefilter.js';
-import { WORK_MODE_DECLARABLE, type AtsBoard } from './discovery/ats.js';
+import type { AtsBoard } from './discovery/ats.js';
 import { geoFilter } from './geo.js';
 import { dedupCards, type NearDuplicate } from './dedup-cards.js';
 import { prefilter } from './prefilter.js';
@@ -87,9 +87,9 @@ export interface PipelineResult {
   /** Where the aggregator table came from, and whether it was there at all.
    *  "missing" and "empty" are different answers. */
   aggregatorTable: { source: string; missing: boolean };
-  /** Board kinds on this run whose API cannot declare a work mode, so A1 §44's
+  /** Sources on this run that cannot declare a work mode, so A1 §44's
    *  `fully-remote` ground cannot fire against them at this stage and is left to
-   *  `admit`. Derived from the boards actually configured, so it cannot claim a
+   *  `admit`. Asked of the adapters that actually ran, so it cannot claim a
    *  coverage the run does not have — and reported at all because "which grounds
    *  are live on this run" is invisible in the output otherwise. */
   workModeUndeclarable: string[];
@@ -254,9 +254,7 @@ export async function runPipeline(
     falseFriendHits: scored.falseFriendHits,
     aggregatorHits,
     aggregatorTable: { source: table.source, missing: table.missing },
-    workModeUndeclarable: [
-      ...new Set((cfg.atsBoards ?? []).filter((b) => !WORK_MODE_DECLARABLE[b.kind]).map((b) => b.kind)),
-    ],
+    workModeUndeclarable: [...new Set(adapters.flatMap((a) => a.workModeUndeclarable ?? [a.id]))],
     report,
     counters: {
       queriesTried: queries.length,

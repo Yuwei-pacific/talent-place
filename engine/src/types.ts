@@ -84,6 +84,11 @@ export interface DiscoverContext {
 export interface SourceAdapter {
   id: string;
   discover(queries: string[], ctx: DiscoverContext): Promise<Card[]>;
+  /** The branches of this source that cannot declare a work mode, so A1 §44's
+   *  `fully-remote` ground cannot fire on them before a read. `[]` means every
+   *  branch declares one. Absent means the source has not said, and the run
+   *  reports it by id: silence must not read as coverage. */
+  workModeUndeclarable?: string[];
 }
 
 export interface ObserveCounters {

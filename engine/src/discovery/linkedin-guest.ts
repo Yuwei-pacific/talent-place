@@ -94,6 +94,8 @@ export function linkedinGuestAdapter(
   const width = opts.width ?? 4;
   return {
     id: 'linkedin-guest',
+    // The guest cards carry title, company, place and date, and no work mode.
+    workModeUndeclarable: ['linkedin-guest'],
     async discover(queries: string[], ctx: DiscoverContext): Promise<Card[]> {
       const pairs = queries.flatMap((q) => locations.map((loc) => ({ q, loc })));
       let collected = 0;

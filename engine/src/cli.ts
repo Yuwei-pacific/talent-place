@@ -80,7 +80,7 @@ function summary(r: PipelineResult, masterId: string, edition: string): string {
   if (r.workModeUndeclarable.length) {
     lines.push(
       `  coverage  work mode not declarable by: ${r.workModeUndeclarable.join(', ')}` +
-        ` — A1 §44 fully-remote cannot fire on those boards, only in admit`,
+        ` — A1 §44 fully-remote cannot fire on those sources, only in admit`,
     );
   }
   if (r.aggregatorTable.missing) lines.push(`  WARNING   aggregator table not found at ${r.aggregatorTable.source}`);

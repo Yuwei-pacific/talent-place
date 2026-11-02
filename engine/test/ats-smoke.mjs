@@ -189,6 +189,12 @@ assert.throws(
   );
 }
 
+// The adapter reports the kinds in THIS run's boards, so a Lever-only run has no gap.
+const gh = { kind: 'greenhouse', board: 'a', company: 'A' };
+const lv = { kind: 'lever', board: 'b', company: 'B' };
+assert.deepEqual(atsAdapter([gh, lv, { ...gh, board: 'c' }]).workModeUndeclarable, ['greenhouse']);
+assert.deepEqual(atsAdapter([lv]).workModeUndeclarable, []);
+
 console.log(
   'ats-smoke: OK (display name not slug, greenhouse + lever parse, unknown kind refused, wired, ' +
     'work mode declared by lever and ashby but not greenhouse, isRemote is not the field)',
