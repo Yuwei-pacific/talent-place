@@ -83,6 +83,17 @@ class FakeStat:
         self.st_mtime = 0.0
 
 
+class WinStat:
+    """os.stat_result as Windows returns it: no st_blocks, no st_flags."""
+
+    def __init__(self, size=100, attrs=0x20, mode=0o100644):
+        self.st_size = size
+        self.st_file_attributes = attrs
+        self.st_mode = mode
+        self.st_mtime_ns = 1
+        self.st_mtime = 0.0
+
+
 class TmpDirCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="sync-test-"))
@@ -90,7 +101,7 @@ class TmpDirCase(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def patch_stat_for(self, target, **fields):
+    def patch_stat_for(self, target, stat_result=None, **fields):
         """Patch os.stat to report `fields` for exactly `target`, delegating
         everything else to the real os.stat.
 
@@ -102,7 +113,7 @@ class TmpDirCase(unittest.TestCase):
 
         def fake(path, *a, **k):
             if isinstance(path, (str, os.PathLike)) and str(path) == wanted:
-                return FakeStat(**fields)
+                return stat_result if stat_result is not None else FakeStat(**fields)
             return real(path, *a, **k)
 
         return mock.patch.object(synced_fs.os, "stat", side_effect=fake)
@@ -141,6 +152,39 @@ class TestDataless(TmpDirCase):
 
     def test_missing_file_is_not_dataless(self):
         self.assertFalse(synced_fs.is_dataless(self.tmp / "nope.xlsx"))
+
+    def _windows_file(self, attrs):
+        f = self.tmp / "onedrive.xlsx"
+        f.write_bytes(b"placeholder")
+        return f, self.patch_stat_for(f, stat_result=WinStat(size=14609, attrs=attrs))
+
+    def test_windows_local_file_is_not_dataless(self):
+        f, patched = self._windows_file(0x20)  # ARCHIVE
+        with patched:
+            self.assertFalse(synced_fs.is_dataless(f))
+
+    def test_windows_recall_on_data_access_is_dataless(self):
+        # What OneDrive sets on an online-only file: opening it downloads the bytes.
+        f, patched = self._windows_file(0x20 | 0x400000)
+        with patched:
+            self.assertTrue(synced_fs.is_dataless(f))
+
+    def test_windows_recall_on_open_is_dataless(self):
+        f, patched = self._windows_file(0x20 | 0x40000)
+        with patched:
+            self.assertTrue(synced_fs.is_dataless(f))
+
+    def test_windows_offline_is_dataless(self):
+        f, patched = self._windows_file(0x20 | 0x1000)
+        with patched:
+            self.assertTrue(synced_fs.is_dataless(f))
+
+    def test_describe_without_st_blocks(self):
+        f, patched = self._windows_file(0x20)
+        with patched:
+            out = synced_fs.describe(f)
+        self.assertIsNone(out["blocks"])
+        self.assertFalse(out["dataless"])
 
     def test_writable_refuses_dataless_unless_allowed(self):
         target = self.tmp / "Review.xlsx"
