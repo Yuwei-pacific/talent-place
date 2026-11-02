@@ -12,6 +12,7 @@ import { strict as assert } from 'node:assert';
 import {
   admissibilityVerdict,
   INTERN_SIGNAL,
+  isKnownLanguage,
   isWorkMode,
   normLanguage,
   workModeFrom,
@@ -266,5 +267,29 @@ assert.equal(ground({ title: 'Marketing Assistant', stageNature: false }), 'ammi
 for (const word of ['Trainee', 'Alternance', 'Alternant', 'Apprenti', 'Junior', 'Assistant']) {
   assert.equal(INTERN_SIGNAL.test(`Sales ${word}`), false, `${word} must not earn the internship boost`);
 }
+
+// ---------------------------------------------------------------------------
+// A level or a qualifier on a language is not a new language. Anything the table
+// does not recognise is undeclared, which A1 §46 keeps uncertain: it used to fold
+// to a nonsense name ("englishc") that no admitted list could ever contain, so
+// transcribing "English C1" excluded a role whose language was admitted.
+// ---------------------------------------------------------------------------
+assert.equal(
+  ground({ title: 'Stage', requiredLanguages: ['English C1'], languageRequirement: 'all', admittedLanguages: IT_EN }),
+  'ammissibile',
+);
+assert.equal(
+  ground({ title: 'Stage', requiredLanguages: ['Italiano madrelingua'], languageRequirement: 'any', admittedLanguages: IT_EN }),
+  'ammissibile',
+);
+assert.equal(isKnownLanguage('English C1'), false);
+for (const l of ['English', 'inglese', 'EN', 'Français', 'Portuguese', 'mandarin', 'Dutch']) {
+  assert.equal(isKnownLanguage(l), true, l);
+}
+// Widening the table has to keep a genuine mismatch firing.
+assert.equal(
+  ground({ title: 'Stage', requiredLanguages: ['Portuguese'], languageRequirement: 'all', admittedLanguages: IT_EN }),
+  'mandatory-language',
+);
 
 console.log('admissibility-smoke: OK');

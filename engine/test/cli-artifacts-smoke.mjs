@@ -168,4 +168,50 @@ const role = (over) => ({ title: 'Stage', url: 'https://x.example/1', ...over })
   assert.match(bad.stderr, /roles\[0\]\.stageNature must be true or false/);
 }
 
+// ---------------------------------------------------------------------------
+// `admit` promises to refuse and to report EVERY problem. Each case below used to
+// pass silently or die with a stack trace, and the silent ones are the dangerous
+// ones: a run with no admitted list reads as "0 excluded" with its language ground
+// switched off.
+// ---------------------------------------------------------------------------
+{
+  const langs = { requiredLanguages: ['Spanish', 'German'], languageRequirement: 'all' };
+
+  // A required language with nothing to compare it against.
+  const noList = admit({ roles: [role(langs)] });
+  assert.equal(noList.status, 2);
+  assert.match(noList.stderr, /roles\[0\]\.requiredLanguages .*admittedLanguages/);
+
+  // Either level can supply the list, and a role with no requirement needs none.
+  assert.equal(admit({ admittedLanguages: ['it', 'en'], roles: [role(langs)] }).out.counts.escluso, 1);
+  assert.equal(admit({ roles: [role({ ...langs, admittedLanguages: ['it'] })] }).out.counts.escluso, 1);
+  assert.equal(admit({ roles: [role({})] }).status, 0);
+
+  // A level is refused here rather than quietly read as undeclared: the operator
+  // can fix it, and the message says how.
+  const level = admit({
+    admittedLanguages: ['it'],
+    roles: [role({ requiredLanguages: ['English C1'], languageRequirement: 'any' })],
+  });
+  assert.equal(level.status, 2);
+  assert.match(level.stderr, /roles\[0\]\.requiredLanguages.*"English C1"/);
+  assert.match(admit({ admittedLanguages: ['Elvish'], roles: [] }).stderr, /admittedLanguages.*"Elvish"/);
+
+  // Wrong shapes are reported, not thrown.
+  const shape = admit({ admittedLanguages: ['it'], roles: [role({ admittedLanguages: 'en', company: 42 })] });
+  assert.equal(shape.status, 2);
+  assert.match(shape.stderr, /roles\[0\]\.admittedLanguages must be an array/);
+  assert.match(shape.stderr, /roles\[0\]\.company must be a string/);
+  for (const text of ['null', '[]', '{ not json']) {
+    const r = admit(text);
+    assert.equal(r.status, 2, text);
+    assert.match(r.stderr, /admit refused/, text);
+    assert.doesNotMatch(r.stderr, /at .*\.js:\d+/, `no stack trace for ${text}`);
+  }
+
+  // Every problem at once, which is the contract.
+  const many = admit({ roles: [{ title: '' }, { url: 'x' }] });
+  assert.ok((many.stderr.match(/is required/g) ?? []).length >= 3, many.stderr);
+}
+
 console.log('cli-artifacts-smoke: OK (real CLI, both gates reach dropped.json + run-report.json)');

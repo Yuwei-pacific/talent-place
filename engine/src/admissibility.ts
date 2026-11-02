@@ -137,7 +137,18 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   fr: 'french', francese: 'french', french: 'french', francais: 'french', franzosisch: 'french',
   de: 'german', tedesco: 'german', german: 'german', deutsch: 'german', allemand: 'german',
   es: 'spanish', spagnolo: 'spanish', spanish: 'spanish', espanol: 'spanish', espagnol: 'spanish',
+  pt: 'portuguese', portoghese: 'portuguese', portuguese: 'portuguese', portugues: 'portuguese', portugais: 'portuguese',
+  nl: 'dutch', olandese: 'dutch', dutch: 'dutch', nederlands: 'dutch', neerlandais: 'dutch',
+  zh: 'chinese', cinese: 'chinese', chinese: 'chinese', chinois: 'chinese', mandarin: 'chinese', mandarino: 'chinese',
+  ja: 'japanese', giapponese: 'japanese', japanese: 'japanese', japonais: 'japanese',
+  ko: 'korean', coreano: 'korean', korean: 'korean', coreen: 'korean',
+  ru: 'russian', russo: 'russian', russian: 'russian', russe: 'russian',
+  ar: 'arabic', arabo: 'arabic', arabic: 'arabic', arabe: 'arabic',
+  pl: 'polish', polacco: 'polish', polish: 'polish', polonais: 'polish',
+  sv: 'swedish', svedese: 'swedish', swedish: 'swedish', suedois: 'swedish',
 };
+
+const KNOWN_LANGUAGES: ReadonlySet<string> = new Set(Object.values(LANGUAGE_ALIASES));
 
 export function normLanguage(value: string): string {
   const key = (value || '')
@@ -147,6 +158,12 @@ export function normLanguage(value: string): string {
     .replace(/[̀-ͯ]/g, '')
     .replace(/[^a-z]/g, '');
   return LANGUAGE_ALIASES[key] ?? key;
+}
+
+/** Is this a bare language name the table knows? "English C1" is not: `admit`
+ *  refuses it, and the verdict treats it as undeclared (A1 §46). */
+export function isKnownLanguage(value: string): boolean {
+  return KNOWN_LANGUAGES.has(normLanguage(value));
 }
 
 /** The fields A1 §44 names. `Card` satisfies this structurally, so the pipeline
@@ -224,8 +241,9 @@ export function admissibilityVerdict(f: AdmissibilityFields): Admissibility {
   }
 
   // "lingua obbligatoria incompatibile con le lingue ammesse e senza alternativa"
-  const required = (f.requiredLanguages ?? []).map(normLanguage).filter(Boolean);
-  const admitted = new Set((f.admittedLanguages ?? []).map(normLanguage).filter(Boolean));
+  const known = (values?: string[]) => (values ?? []).filter(isKnownLanguage).map(normLanguage);
+  const required = known(f.requiredLanguages);
+  const admitted = new Set(known(f.admittedLanguages));
   // "e senza alternativa" is the whole question, and it is a question about the
   // AD's shape rather than about any one language. See `languageRequirement`.
   //   all -> satisfiable only if every demanded language is admitted

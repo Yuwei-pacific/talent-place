@@ -21,6 +21,7 @@ import { runVerification, parseTargets } from './verify.js';
 import { newCounters, indeedLine, exclude } from './observe.js';
 import {
   admissibilityVerdict,
+  isKnownLanguage,
   isWorkMode,
   isLanguageRequirement,
   LANGUAGE_REQUIREMENTS,
@@ -136,7 +137,20 @@ function cmdAdmit(args: Record<string, string>): number {
     return 2;
   }
   const fieldsPath = resolve(args.fields);
-  const raw = JSON.parse(readFileSync(fieldsPath, 'utf-8')) as Record<string, unknown>;
+  const refuse = (problems: string[]): number => {
+    process.stderr.write(`admit refused ${fieldsPath}:\n${problems.map((p) => `  ${p}\n`).join('')}`);
+    return 2;
+  };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(fieldsPath, 'utf-8'));
+  } catch (err) {
+    return refuse([`cannot read it as JSON: ${err instanceof Error ? err.message : String(err)}`]);
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return refuse(['the top level must be an object with `roles` and `admittedLanguages`']);
+  }
+  const raw = parsed as Record<string, unknown>;
 
   // Refuse rather than guess, and report EVERY problem: a caller that fixes one
   // field per attempt learns nothing about the shape it got wrong.
@@ -149,7 +163,20 @@ function cmdAdmit(args: Record<string, string>): number {
     }
     return v as string[];
   };
-  const admittedLanguages = strList(raw.admittedLanguages, 'admittedLanguages');
+  // A language the table does not know is refused, not read as a language: a
+  // level ("English C1") would otherwise look like a requirement nothing admits.
+  const langList = (v: unknown, where: string): string[] => {
+    const list = strList(v, where);
+    const unknown = list.filter((l) => !isKnownLanguage(l));
+    if (unknown.length) {
+      problems.push(
+        `${where} has ${unknown.map((l) => JSON.stringify(l)).join(', ')}: write the bare language ` +
+          `("English", not "English C1"); a real language missing from the table belongs in LANGUAGE_ALIASES`,
+      );
+    }
+    return list;
+  };
+  const admittedLanguages = langList(raw.admittedLanguages, 'admittedLanguages');
   if (!Array.isArray(raw.roles)) problems.push('roles must be an array');
   const roles = Array.isArray(raw.roles) ? (raw.roles as Array<Record<string, unknown>>) : [];
   roles.forEach((r, i) => {
@@ -170,7 +197,19 @@ function cmdAdmit(args: Record<string, string>): number {
     if (r?.stageNature !== undefined && typeof r.stageNature !== 'boolean') {
       problems.push(`${where}.stageNature must be true or false, got ${JSON.stringify(r.stageNature)}`);
     }
-    const reqLangs = strList(r?.requiredLanguages, `${where}.requiredLanguages`);
+    if (r?.company !== undefined && typeof r.company !== 'string') {
+      problems.push(`${where}.company must be a string, got ${JSON.stringify(r.company)}`);
+    }
+    const reqLangs = langList(r?.requiredLanguages, `${where}.requiredLanguages`);
+    const roleAdmitted = langList(r?.admittedLanguages, `${where}.admittedLanguages`);
+    // Without an admitted list the ground cannot fire, and the run would report
+    // "0 excluded" as though the languages had been checked.
+    if (reqLangs.length > 0 && roleAdmitted.length === 0 && admittedLanguages.length === 0) {
+      problems.push(
+        `${where}.requiredLanguages has nothing to be compared against: give admittedLanguages, ` +
+          `from A3 search_preferences.job_languages`,
+      );
+    }
     // Refused rather than defaulted, because the two readings give OPPOSITE
     // verdicts on the same list and the code cannot tell which the ad meant.
     // Found on the 2026-09-24 Strategic design run: "Fluent level of English,
@@ -184,10 +223,7 @@ function cmdAdmit(args: Record<string, string>): number {
       );
     }
   });
-  if (problems.length) {
-    process.stderr.write(`admit refused ${fieldsPath}:\n${problems.map((p) => `  ${p}\n`).join('')}`);
-    return 2;
-  }
+  if (problems.length) return refuse(problems);
 
   const counters = newCounters();
   const excluded: Array<{ url: string; company: string; title: string; ground: string; detail: string }> = [];
