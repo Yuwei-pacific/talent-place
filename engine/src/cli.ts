@@ -11,11 +11,13 @@
 // It deliberately stops at the prefiltered card list. Reading each surviving
 // description and judging it against A1 and the Master's A2 is the agent's job;
 // encoding that here would put a judgement behind a `--flag`.
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import type { Card } from './types.js';
 import { runPipeline, type PipelineConfig, type PipelineResult } from './pipeline.js';
-import { defaultAdapters } from './discovery/run.js';
+import { DEFAULT_RATES, defaultAdapters } from './discovery/run.js';
+import { readPostings } from './read-postings.js';
+import { RateLimiter, newCooldown, newSourceHealth, newStopToken } from './ratelimit.js';
 import { loadHistory, checkDup } from './history.js';
 import { runVerification, parseTargets } from './verify.js';
 import { newCounters, indeedLine, exclude } from './observe.js';
@@ -91,7 +93,7 @@ function summary(r: PipelineResult, masterId: string, edition: string): string {
     const why = s.reason ? ` — ${s.reason}` : '';
     lines.push(
       `    ${s.id}: ${s.status}, ${s.cards} cards, ${s.elapsedMs}ms, ` +
-        `${s.health.requests} requests (ok ${s.health.ok}, 429 ${s.health.blocked429}, 403 ${s.health.blocked403}, gone ${s.health.gone}, err ${s.health.errors})${why}`,
+        `${s.health.requests} requests (ok ${s.health.ok}, 429 ${s.health.blocked429}, 403 ${s.health.blocked403}, gone ${s.health.gone}, err ${s.health.errors}, cooldowns ${s.health.cooldowns})${why}`,
     );
   }
   return lines.join('\n');
@@ -99,10 +101,16 @@ function summary(r: PipelineResult, masterId: string, edition: string): string {
 
 const USAGE = [
   'usage:',
-  '  node lib/cli.js discover --config <run.json> --out <dir> [--history <exported history.csv>]',
+  '  node lib/cli.js discover --config <run.json> --out <dir> [--history <exported history.csv>] [--resume]',
+  '  node lib/cli.js read     --cards <cards.json> --out <dir> [--top N] [--rate R] [--cooldown-minutes M] [--max-cooldowns N]',
   '  node lib/cli.js verify   --urls <list.txt>  --out <dir>',
   '  node lib/cli.js admit    --fields <declared.json> --out <dir>',
   '  node lib/cli.js indeed   --status Used|Unavailable --x N --y N --z N [--p N] [--note "<perché>"]',
+  '',
+  'discover records each finished query in <dir>/checkpoint.jsonl and --resume picks',
+  'up from it; without --resume an existing checkpoint is refused, so that two runs',
+  'never mix. read fetches the descriptions of a card list into descriptions.json,',
+  'and asks only for what that file does not already hold.',
   '',
   'verify reads one URL per line (optionally "label;url"), probes each on the',
   'employer side, and writes employer-checks.csv with an A4 Verification Status',
@@ -355,16 +363,51 @@ async function cmdVerify(args: Record<string, string>): Promise<number> {
   return 0;
 }
 
+async function cmdRead(args: Record<string, string>): Promise<number> {
+  if (!args.cards || !args.out) {
+    process.stderr.write('read needs --cards and --out\n');
+    return 2;
+  }
+  const outDir = resolve(args.out);
+  mkdirSync(outDir, { recursive: true });
+  let cards = JSON.parse(readFileSync(resolve(args.cards), 'utf-8')) as Card[];
+  if (args.top) cards = cards.slice(0, Number(args.top));
+
+  const seconds = args['cooldown-seconds'] ? Number(args['cooldown-seconds']) : Number(args['cooldown-minutes'] ?? 0) * 60;
+  const stop = newStopToken();
+  const health = newSourceHealth();
+  const guard = {
+    limiter: new RateLimiter({ ratePerSec: args.rate ? Number(args.rate) : DEFAULT_RATES['linkedin-guest'] }),
+    stop,
+    health,
+    ...(seconds > 0 ? { cooldown: newCooldown(seconds * 1000, Number(args['max-cooldowns'] ?? 12)) } : {}),
+  };
+  const report = await readPostings(cards, join(outDir, 'descriptions.json'), guard, args['linkedin-base']);
+  writeFileSync(
+    join(outDir, 'read-report.json'),
+    JSON.stringify({ ...report, stopped: stop.kind, reason: stop.reason, health }, null, 1),
+  );
+  process.stdout.write(
+    `read ${report.read} new, ${report.alreadyRead} already held, ${report.gone} gone, ${report.unread} unread` +
+      (report.withoutId ? `, ${report.withoutId} without an id` : '') +
+      ` (requests ${health.requests}, ok ${health.ok}, 429 ${health.blocked429}, cooldowns ${health.cooldowns})` +
+      (stop.reason ? ` — ${stop.reason}` : '') +
+      `\n  wrote ${outDir}/descriptions.json\n`,
+  );
+  return 0;
+}
+
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
   const args = parseArgs(argv.slice(1));
 
-  const COMMANDS = ['discover', 'verify', 'admit', 'indeed'];
+  const COMMANDS = ['discover', 'read', 'verify', 'admit', 'indeed'];
   if (args.help || !cmd || !COMMANDS.includes(cmd)) {
     process.stderr.write(USAGE + '\n');
     return cmd && COMMANDS.includes(cmd) ? 0 : 2;
   }
+  if (cmd === 'read') return cmdRead(args);
   if (cmd === 'verify') return cmdVerify(args);
   if (cmd === 'admit') return cmdAdmit(args);
   if (cmd === 'indeed') return cmdIndeed(args);
@@ -378,8 +421,16 @@ async function main(): Promise<number> {
   const outDir = resolve(args.out);
   mkdirSync(outDir, { recursive: true });
 
+  const checkpoint = join(outDir, 'checkpoint.jsonl');
+  if (existsSync(checkpoint) && !('resume' in args)) {
+    process.stderr.write(`${checkpoint} exists: pass --resume to continue that run, or choose a new --out\n`);
+    return 2;
+  }
+
   const adapters = defaultAdapters({
     linkedinLocations: cfg.locations,
+    linkedinRecencyDays: cfg.recencyDays,
+    linkedinCheckpoint: checkpoint,
     // Only ever set by tests and by an operator pointing at a local fixture.
     linkedinBaseUrl: args['linkedin-base'],
     // Employer boards from the run config. Absent means the run stays on
