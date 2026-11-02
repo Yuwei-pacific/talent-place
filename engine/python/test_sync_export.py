@@ -656,7 +656,17 @@ class TestSplitter(TmpDirCase):
     def test_norm_company_parity_with_typescript(self):
         if not TS_LIB.exists() or shutil.which("node") is None:
             self.skipTest("TS build or node unavailable")
-        names = ["Accenture S.p.A.", "Nestlé", "Loro Piana", "Kering SA", "Moncler Group", "NTT DATA", "PwC"]
+        # The parenthetical cases are here because of the mistake this suite has
+        # already made once, with `MULTI_VALUE_SPEC`: a parity test that compares
+        # BEHAVIOUR on a fixed list of cases proves nothing about a case the list
+        # does not contain. The parenthetical rule was added to both sides on
+        # 2026-09-24 and not one of the original names has a parenthetical, so
+        # without these three the two implementations could have diverged here
+        # in silence — which is precisely how the splitter diverged before.
+        names = [
+            "Accenture S.p.A.", "Nestlé", "Loro Piana", "Kering SA", "Moncler Group", "NTT DATA", "PwC",
+            "Miu Miu (Gruppo Prada)", "Acme (Italia) S.p.A.", "Studio Rossi (Design) Srl",
+        ]
         script = (
             'import("./lib/normalize.js").then(({normCompany}) => {'
             "  console.log(JSON.stringify(JSON.parse(process.argv[1]).map(normCompany)));"

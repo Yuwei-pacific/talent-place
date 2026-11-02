@@ -7,6 +7,7 @@
 import { strict as assert } from 'node:assert';
 import { createServer } from 'node:http';
 import { statusFromCheck, runVerification, parseTargets } from '../lib/verify.js';
+import { checkEmployerPage } from '../lib/discovery/employer.js';
 
 const check = (over) => ({
   url: 'https://x.example/1',
@@ -149,6 +150,26 @@ const check = (over) => ({
   assert.ok(hits - before <= 1, `a stopped batch must not keep sending; server saw ${hits - before} more`);
 
   await new Promise((r) => srv.close(r));
+}
+
+// ---------------------------------------------------------------------------
+// The probe's "does it mention a stage" must use the rule's own vocabulary. It
+// kept a narrower copy, so a French or German posting reported no signal while
+// the gate would have recognised the same words.
+// ---------------------------------------------------------------------------
+{
+  const srv = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end(`<html><head><title>x</title></head><body>${decodeURIComponent(req.url.slice(1))}</body></html>`);
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  for (const word of ['Stagiaire', 'Praktikant', 'Becario', 'tirocinanti']) {
+    const c = await checkEmployerPage(`${base}/${word}`);
+    assert.equal(c.hasInternSignal, true, word);
+  }
+  assert.equal((await checkEmployerPage(`${base}/Consultant`)).hasInternSignal, false);
+  srv.close();
 }
 
 console.log('verify-smoke: OK (A4 vocabulary, soft-404 vs JS shell, Blocked motives, URL list, parallel + stop)');
