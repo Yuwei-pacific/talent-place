@@ -11,6 +11,7 @@
 import { strict as assert } from 'node:assert';
 import {
   admissibilityVerdict,
+  INTERN_SIGNAL,
   isWorkMode,
   normLanguage,
   workModeFrom,
@@ -196,5 +197,74 @@ assert.equal(
   }),
   'ammissibile',
 );
+
+// ---------------------------------------------------------------------------
+// A1 §44 says "chiaramente senior/manager/director, salvo esplicita natura di
+// stage". Both halves were narrower in the code than in the sentence, and this
+// ground fires BEFORE a read, so a miss here is a role nobody ever sees.
+// ---------------------------------------------------------------------------
+// Inflections and same-meaning words for an internship are a stage in the title.
+for (const title of [
+  'Brand Manager Interns',
+  'Marketing Manager - Stages',
+  'Becario Product Manager',
+  'Becaria Brand Manager',
+  'Stageur Project Manager',
+  'Stagiaires Product Manager',
+  'Stagisti Project Manager',
+  'Tirocinanti Project Manager',
+  'Marketing Manager - Stage curriculare',
+  'Project Manager Werkstudent',
+]) {
+  assert.equal(ground({ title }), 'ammissibile', `an internship word in the title: ${title}`);
+}
+
+// A qualifier means the title is not CLEARLY manager or director. That is not the
+// same as being a stage, which is why this list is not in INTERN_SIGNAL: the read
+// decides, and A1 says junior alone does not qualify.
+for (const title of [
+  'Assistant Product Manager',
+  'Junior Art Director',
+  'Jr. Project Manager',
+  'Product Manager Trainee',
+  'Alternant - Assistant manager',
+  'Apprenti Chef de Projet Manager',
+]) {
+  assert.equal(ground({ title }), 'ammissibile', `not clearly senior, so the read decides: ${title}`);
+}
+
+// ...but a qualifier cannot launder a role that says senior outright.
+for (const title of ['Senior Assistant Manager', 'Junior Head of Design', 'Principal Trainee Consultant']) {
+  assert.equal(ground({ title }), 'senior-without-stage', `still clearly senior: ${title}`);
+}
+
+// Bare seniority still fires: a gate that catches nothing protects nothing.
+for (const title of ['Product Manager', 'Art Director', 'Senior Consultant', 'Head of Design']) {
+  assert.equal(ground({ title }), 'senior-without-stage', title);
+}
+
+// The escape hatch reads the card's text too, not only its title.
+assert.equal(
+  ground({ title: 'Product Manager', snippet: 'Stage curriculare di 6 mesi' }),
+  'ammissibile',
+  'A1: "salvo esplicita natura di stage" does not say where the ad made it explicit',
+);
+
+// `admit` has a read and no snippet, so the read has to be able to say so, in
+// either direction. Declared beats inferred, as everywhere else in this file.
+assert.equal(ground({ title: 'Product Manager', stageNature: true }), 'ammissibile');
+assert.equal(
+  ground({ title: 'Stage Manager', stageNature: false }),
+  'senior-without-stage',
+  'the theatre job: the word is in the title and a read says it is not a stage',
+);
+assert.equal(ground({ title: 'Marketing Assistant', stageNature: false }), 'ammissibile', 'not a senior title at all');
+
+// The vocabulary is shared with the prefilter's relevance boost, so what stays
+// OUT of it matters as much. Measured on the 2026-09-24 run: 46 of 698 unique
+// titles were trainee or French work-study, mostly unrelated retail sales.
+for (const word of ['Trainee', 'Alternance', 'Alternant', 'Apprenti', 'Junior', 'Assistant']) {
+  assert.equal(INTERN_SIGNAL.test(`Sales ${word}`), false, `${word} must not earn the internship boost`);
+}
 
 console.log('admissibility-smoke: OK');

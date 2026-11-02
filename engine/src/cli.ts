@@ -167,6 +167,9 @@ function cmdAdmit(args: Record<string, string>): number {
     if (r?.applicationOpen !== undefined && typeof r.applicationOpen !== 'boolean') {
       problems.push(`${where}.applicationOpen must be true or false, got ${JSON.stringify(r.applicationOpen)}`);
     }
+    if (r?.stageNature !== undefined && typeof r.stageNature !== 'boolean') {
+      problems.push(`${where}.stageNature must be true or false, got ${JSON.stringify(r.stageNature)}`);
+    }
     const reqLangs = strList(r?.requiredLanguages, `${where}.requiredLanguages`);
     // Refused rather than defaulted, because the two readings give OPPOSITE
     // verdicts on the same list and the code cannot tell which the ad meant.
@@ -193,6 +196,7 @@ function cmdAdmit(args: Record<string, string>): number {
       title: r.title as string,
       workMode: r.workMode as string | undefined,
       applicationOpen: r.applicationOpen as boolean | undefined,
+      stageNature: r.stageNature as boolean | undefined,
       requiredLanguages: (r.requiredLanguages as string[] | undefined) ?? [],
       languageRequirement: r.languageRequirement as 'all' | 'any' | undefined,
       // Per-role wins when a role carries its own, otherwise A3's list decides.

@@ -13,10 +13,8 @@
 //   unknown ATS / self-built career pages (layer 3).
 import type { Card } from '../types.js';
 import type { Guard } from '../ratelimit.js';
-import { workModeFrom } from '../admissibility.js';
+import { INTERN_SIGNAL, workModeFrom } from '../admissibility.js';
 import { fetchGuarded, fetchText } from './http.js';
-
-const INTERN_HINT = /\b(intern|internship|stage|stagista|tirocinio|tirocinante|working student|curricular)\b/i;
 
 export async function ashbyBoard(
   board: string,
@@ -48,7 +46,7 @@ export async function ashbyBoard(
     for (const j of data.jobs || []) {
       if (j.isListed === false) continue;
       const hay = `${j.title} ${j.employmentType || ''}`;
-      if (!INTERN_HINT.test(hay)) continue;
+      if (!INTERN_SIGNAL.test(hay)) continue;
       out.push({
         title: j.title,
         company,
@@ -123,7 +121,7 @@ export async function checkEmployerPage(url: string, guard?: Guard): Promise<Emp
   return {
     url,
     reachable: true,
-    hasInternSignal: INTERN_HINT.test(head),
+    hasInternSignal: INTERN_SIGNAL.test(head),
     hasApply: /apply|candidati|invia (il tuo )?curriculum|bewerbung/i.test(head),
     title,
     detail: 'page alive',

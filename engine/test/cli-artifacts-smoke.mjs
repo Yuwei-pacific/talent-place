@@ -12,7 +12,7 @@
 // pointing at a local fixture", and this is the first of those.
 import { strict as assert } from 'node:assert';
 import { createServer } from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -135,6 +135,37 @@ try {
 } finally {
   srv.close();
   rmSync(dir, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// `admit`, through the real CLI. It takes what a read established, so the read
+// has to be able to overrule what a title suggests.
+// ---------------------------------------------------------------------------
+const admit = (fields) => {
+  const d = mkdtempSync(join(tmpdir(), 'admit-'));
+  try {
+    const path = join(d, 'declared.json');
+    writeFileSync(path, typeof fields === 'string' ? fields : JSON.stringify(fields));
+    const res = spawnSync(process.execPath, ['lib/cli.js', 'admit', '--fields', path, '--out', d], {
+      cwd: ENGINE,
+      encoding: 'utf-8',
+    });
+    const out = res.status === 0 ? JSON.parse(readFileSync(join(d, 'exclusions.json'), 'utf-8')) : null;
+    return { status: res.status, stderr: res.stderr, out };
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+};
+const role = (over) => ({ title: 'Stage', url: 'https://x.example/1', ...over });
+{
+  const ok = admit({ roles: [role({ title: 'Product Manager', stageNature: true }), role({ title: 'Product Manager' })] });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(ok.out.counts.ammissibile, 1, 'a declared stage survives a manager title');
+  assert.deepEqual(ok.out.excluded.map((e) => e.ground), ['senior-without-stage']);
+
+  const bad = admit({ roles: [role({ stageNature: 'yes' })] });
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /roles\[0\]\.stageNature must be true or false/);
 }
 
 console.log('cli-artifacts-smoke: OK (real CLI, both gates reach dropped.json + run-report.json)');

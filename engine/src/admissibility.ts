@@ -87,13 +87,41 @@ export function workModeFrom(value: unknown): WorkMode | undefined {
 }
 
 /** A1 §44: internship vocabulary. Also the escape hatch in `senior-without-stage`
- *  ("salvo esplicita natura di stage"), and the relevance signal `prefilter`
- *  scores with — one definition so the two cannot drift apart. */
+ *  ("salvo esplicita natura di stage"), the relevance signal `prefilter` scores
+ *  with, and the employer probe's "does it mention a stage" — one definition so
+ *  they cannot drift apart.
+ *
+ *  Inflections and same-meaning translations only. Because the prefilter boosts
+ *  on this, a word that merely might be a student role does not belong here: see
+ *  `NOT_CLEARLY_SENIOR`. */
 export const INTERN_SIGNAL =
-  /\b(intern|internship|stage|stagista|tirocinio|tirocinante|working student|graduate internship|curricular|praktikant|praktikum|beca|stagiaire)\b/i;
+  /\b(interns?|internships?|stages?|stagist[aie]|stagiaires?|stageur|tirocini|tirocinio|tirocinant[ei]|working students?|werkstudent(?:in)?|graduate internship|curricular|curriculare|curricolare|praktikant(?:in)?|praktikum|becas?|becari[oa]s?)\b/i;
 
 /** A1 §44: "ruoli chiaramente senior/manager/director". */
 export const SENIOR_SIGNAL = /\b(senior|manager|director|head of|vice president|\bvp\b|principal)\b/i;
+
+/** Words that are senior whatever else the title says. */
+const OUTRIGHT_SENIOR = /\b(senior|head of|vice president|vp|principal)\b/i;
+
+/**
+ * A qualifier that stops a manager or director title being CLEARLY one, which is
+ * the word A1 §44 uses. "Assistant Product Manager" and "Product Manager Trainee"
+ * are not managers.
+ *
+ * Deliberately not in `INTERN_SIGNAL`: these do not make a role a stage, and A1
+ * says "Junior o graduate senza un'effettiva natura di stage/student opportunity
+ * non bastano". They only decline to exclude it unread, so the question reaches
+ * someone who has read the ad. Measured on the 2026-09-24 run: trainee and French
+ * work-study titles were 46 of 698 unique cards, mostly unrelated sales roles, and
+ * giving those the internship boost would push real stages out of `topK`.
+ */
+const NOT_CLEARLY_SENIOR =
+  /\b(junior|jr|assistant|assistante|assistente|trainee|alternant|alternante|alternance|apprenti|apprentie|apprentissage)\b/i;
+
+function clearlySenior(title: string): boolean {
+  if (!SENIOR_SIGNAL.test(title)) return false;
+  return OUTRIGHT_SENIOR.test(title) || !NOT_CLEARLY_SENIOR.test(title);
+}
 
 /** A1 §44: "annuncio chiaramente chiuso". A cheap card-level signal only — the
  *  authoritative form of this ground is a declared `applicationOpen === false`. */
@@ -127,6 +155,10 @@ export interface AdmissibilityFields {
   title: string;
   /** Card-level only. The `admit` path has no snippet — it has a read. */
   snippet?: string;
+  /** What a read established about A1 §44's "esplicita natura di stage". Declared
+   *  beats inferred, in both directions: a "Product Manager" whose ad says stage
+   *  stays, and a theatre "Stage Manager" does not. Absent falls back to the text. */
+  stageNature?: boolean;
   workMode?: string;
   /** `false` is a declaration that the ad is closed; absent is not a declaration
    *  of anything (A1 §46). */
@@ -169,7 +201,7 @@ export function admissibilityVerdict(f: AdmissibilityFields): Admissibility {
   const hay = `${title}\n${f.snippet ?? ''}`;
 
   // "ruoli chiaramente senior/manager/director, salvo esplicita natura di stage"
-  if (SENIOR_SIGNAL.test(title) && !INTERN_SIGNAL.test(title)) {
+  if (clearlySenior(title) && !(f.stageNature ?? INTERN_SIGNAL.test(hay))) {
     return {
       verdict: 'escluso',
       ground: 'senior-without-stage',
