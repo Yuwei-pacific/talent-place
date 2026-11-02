@@ -155,4 +155,48 @@ await (async () => {
   await new Promise((r) => srv.close(r));
 })();
 
+// LinkedIn reads the location as a place name, and "EU" is one: Eu, a town in
+// Normandy. A3 writes EU and means the Union, so the 2026-09-24 run spent its
+// third of the fan-out on one town: all 194 French cards were in Normandy or
+// Hauts-de-France and no other EU country appeared.
+await (async () => {
+  const sent = [];
+  const srv = createServer((req, res) => {
+    sent.push(new URL(req.url, 'http://x').searchParams.get('location'));
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end(card(sent.length, 'alpha'));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const search = async (locations) => {
+    sent.length = 0;
+    const guard = {
+      limiter: new RateLimiter({ ratePerSec: 1000 }),
+      stop: newStopToken(),
+      health: newSourceHealth(),
+    };
+    const cards = await linkedinGuestAdapter(locations, {
+      baseUrl: `http://127.0.0.1:${srv.address().port}`,
+      width: 1,
+    }).discover(['q'], { guard, stop: guard.stop, cap: 100 });
+    return { sent: [...sent], labels: cards.map((c) => c.discoveryQuery) };
+  };
+
+  const eu = await search(['Milan', 'Italy', 'EU']);
+  assert.deepEqual(eu.sent, ['Milan', 'Italy', 'European Union'], 'EU must reach LinkedIn as the Union, not the town');
+  assert.equal(eu.labels[2], 'q — European Union', "Search Query must record what was searched, not A3's shorthand");
+
+  for (const spelling of ['eu', ' EU ', 'E.U.']) {
+    assert.deepEqual((await search([spelling])).sent, ['European Union'], `${spelling} is the same shorthand`);
+  }
+
+  // Each request is budget, and a 429 ends the source: the same place written
+  // twice must not be searched twice.
+  assert.deepEqual((await search(['EU', 'European Union'])).sent, ['European Union']);
+
+  // A place that merely contains the letters is a place, and stays as written.
+  assert.deepEqual((await search(['Eu, Normandy, France'])).sent, ['Eu, Normandy, France']);
+
+  await new Promise((r) => srv.close(r));
+})();
+
 console.log('linkedin-guest-smoke: OK (card identity confined, urn fallback, 403 survives, source isolation)');

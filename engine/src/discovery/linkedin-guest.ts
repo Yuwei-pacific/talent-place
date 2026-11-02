@@ -86,18 +86,36 @@ function guestUrl(keywords: string, location: string, start: number, base: strin
   return `${base}/jobs-guest/jobs/api/seeMoreJobPostings/search?${q.toString()}`;
 }
 
+/**
+ * What LinkedIn must be asked for a location a run wrote.
+ *
+ * LinkedIn reads this parameter as a place name, and "EU" is one: Eu, a town in
+ * Normandy. A3's `geography_priority` writes EU and means the Union, and that is
+ * the right word there, because the rest of the system reads it as geography.
+ * So the translation is this source's and lives at this source's boundary. On
+ * the 2026-09-24 run, all 194 French cards of 698 were in Normandy or
+ * Hauts-de-France and no other EU country appeared; A3's third priority had
+ * never been searched.
+ */
+function linkedinLocation(location: string): string {
+  return /^e\.?u\.?$/i.test(location.trim()) ? 'European Union' : location;
+}
+
 export function linkedinGuestAdapter(
   locations: string[],
   opts: { baseUrl?: string; width?: number } = {},
 ): SourceAdapter {
   const base = opts.baseUrl ?? 'https://www.linkedin.com';
   const width = opts.width ?? 4;
+  // A Set because every request is budget: on 2026-11-02 the source was stopped
+  // after 25, so the same place written twice must not be searched twice.
+  const places = [...new Set(locations.map(linkedinLocation))];
   return {
     id: 'linkedin-guest',
     // The guest cards carry title, company, place and date, and no work mode.
     workModeUndeclarable: ['linkedin-guest'],
     async discover(queries: string[], ctx: DiscoverContext): Promise<Card[]> {
-      const pairs = queries.flatMap((q) => locations.map((loc) => ({ q, loc })));
+      const pairs = queries.flatMap((q) => places.map((loc) => ({ q, loc })));
       let collected = 0;
       // Pooled rather than serial: the limiter, not the loop, is the pacing
       // knob, so overlapping the round-trips hides latency without raising the
