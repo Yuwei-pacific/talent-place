@@ -117,15 +117,22 @@ export interface PipelineResult {
   };
 }
 
-/** The (query, area) fan-out. A1: combine activity terms with internship terms;
- *  never run only the first term of a list. */
+/**
+ * The (query, area) fan-out. A1: combine activity terms with internship terms;
+ * never run only the first term of a list.
+ *
+ * Ordered round-robin across areas, because a source can be stopped at any request
+ * and the queries behind that point never run. Emitted area by area, the 2026-11-02
+ * run stopped after 25 requests of 246 and searched only the first of its 7 areas.
+ */
 export function buildQueries(cfg: PipelineConfig): Array<{ query: string; area: string }> {
+  const perArea = Object.entries(cfg.areas).map(([area, terms]) =>
+    terms.flatMap((t) => cfg.internshipTerms.map((suffix) => ({ query: `${t} ${suffix}`.trim(), area }))),
+  );
   const out: Array<{ query: string; area: string }> = [];
-  for (const [area, terms] of Object.entries(cfg.areas)) {
-    for (const t of terms) {
-      for (const suffix of cfg.internshipTerms) {
-        out.push({ query: `${t} ${suffix}`.trim(), area });
-      }
+  for (let i = 0; perArea.some((queries) => i < queries.length); i++) {
+    for (const queries of perArea) {
+      if (i < queries.length) out.push(queries[i]);
     }
   }
   return out;

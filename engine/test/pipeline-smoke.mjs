@@ -44,6 +44,27 @@ const cfg = {
   assert.equal(deduped.size, pairs.length, 'the fan-out must not repeat a query');
 }
 
+// A source can be stopped at any request, and the 2026-11-02 run was, after 25 of
+// 246. Emitted area by area, that left 6 of its 7 areas with no search at all while
+// the source still reported its cards normally. So every area gets its next query
+// before any area gets a second, and whatever a run can afford is spread across A2.
+{
+  const areas = {
+    One: ['a1', 'a2', 'a3'],
+    Two: ['b1'],
+    Three: ['c1', 'c2'],
+  };
+  const order = buildQueries({ ...cfg, areas, internshipTerms: ['stage', 'internship'] }).map((p) => p.query);
+  assert.deepEqual(order, [
+    'a1 stage', 'b1 stage', 'c1 stage',
+    'a1 internship', 'b1 internship', 'c1 internship',
+    'a2 stage', 'c2 stage',
+    'a2 internship', 'c2 internship',
+    'a3 stage',
+    'a3 internship',
+  ]);
+}
+
 // ---------------------------------------------------------------------------
 // 2. Tagging. Adapters append their own location to discoveryQuery, so the query
 //    is the segment's HEAD; a card found by two areas belongs to both.
