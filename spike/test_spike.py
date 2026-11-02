@@ -7,13 +7,16 @@ pinned here and nothing more.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -176,6 +179,128 @@ class TestState(ProbeCase):
     def test_state_missing_review_is_fail(self):
         self.assertEqual(self.state("normal").returncode, 0)
         self.assertEqual(report(self.master)["T5-normal"]["status"], "FAIL")
+
+
+SEARCH_PAGE = '<li><div data-entity-urn="urn:li:jobPosting:4242"></div></li>'
+POSTING_PAGE = '<div class="show-more-less-html__markup">The role</div>'
+
+
+class FakeWeb:
+    """A local LinkedIn and employer. `routes` maps a path prefix to (status, body)."""
+
+    def __init__(self, routes):
+        self.seen = []
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                outer.seen.append(self.path)
+                for prefix, (status, body) in routes.items():
+                    if self.path.startswith(prefix):
+                        self.send_response(status)
+                        self.end_headers()
+                        self.wfile.write(body.encode("utf-8"))
+                        return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def linkedin_requests(self):
+        return [path for path in self.seen if path.startswith("/jobs-guest/")]
+
+
+GOOD_ROUTES = {
+    "/jobs-guest/jobs/api/seeMoreJobPostings/search": (200, SEARCH_PAGE),
+    "/jobs-guest/jobs/api/jobPosting/4242": (200, POSTING_PAGE),
+    "/employer": (200, "<html>careers</html>"),
+}
+
+
+class TestNet(ProbeCase):
+    def net(self, routes):
+        web = FakeWeb(routes)
+        self.addCleanup(web.close)
+        res = run_probe(
+            "net", "--master", self.master, "--linkedin-base", web.base,
+            "--employer-url", f"{web.base}/employer", "--pause", "0",
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return web, report(self.master)["T3"]
+
+    def test_all_ok_is_pass(self):
+        web, row = self.net(GOOD_ROUTES)
+        self.assertEqual(row["status"], "PASS", row)
+        self.assertEqual(len(web.linkedin_requests()), 2)
+
+    def test_429_is_inconclusive_and_stops(self):
+        routes = {**GOOD_ROUTES, "/jobs-guest/jobs/api/seeMoreJobPostings/search": (429, "slow down")}
+        web, row = self.net(routes)
+        self.assertEqual(row["status"], "INCONCLUSIVE", row)
+        self.assertEqual(row["detail"]["retry_after_minutes"], 20)
+        self.assertEqual(len(web.linkedin_requests()), 1)
+        self.assertIn("/employer", web.seen)
+
+    def test_429_on_the_posting_is_inconclusive(self):
+        routes = {**GOOD_ROUTES, "/jobs-guest/jobs/api/jobPosting/4242": (429, "slow down")}
+        _, row = self.net(routes)
+        self.assertEqual(row["status"], "INCONCLUSIVE", row)
+
+    def test_allowlist_403_named(self):
+        routes = {**GOOD_ROUTES, "/jobs-guest/jobs/api/seeMoreJobPostings/search": (403, "403 blocked-by-allowlist")}
+        _, row = self.net(routes)
+        self.assertEqual(row["status"], "FAIL")
+        self.assertEqual(row["detail"]["search"], "allowlist_blocked")
+
+    def test_empty_results_is_fail(self):
+        routes = {**GOOD_ROUTES, "/jobs-guest/jobs/api/seeMoreJobPostings/search": (200, "<html></html>")}
+        web, row = self.net(routes)
+        self.assertEqual(row["status"], "FAIL")
+        self.assertEqual(row["detail"]["search"], "no_cards")
+        self.assertEqual(len(web.linkedin_requests()), 1)
+
+    def test_posting_without_description_is_fail(self):
+        routes = {**GOOD_ROUTES, "/jobs-guest/jobs/api/jobPosting/4242": (200, "<html>sign in</html>")}
+        _, row = self.net(routes)
+        self.assertEqual(row["status"], "FAIL")
+        self.assertEqual(row["detail"]["posting"], "no_description")
+
+    def test_connection_refused_is_network_error(self):
+        res = run_probe(
+            "net", "--master", self.master, "--linkedin-base", "http://127.0.0.1:9",
+            "--employer-url", "http://127.0.0.1:9/employer", "--pause", "0",
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        row = report(self.master)["T3"]
+        self.assertEqual(row["status"], "FAIL")
+        self.assertEqual(row["detail"]["search"], "network_error")
+
+
+class TestClassify(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location("probe", PROBE)
+        cls.probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.probe)
+
+    def test_classes(self):
+        classify = self.probe.classify_response
+        self.assertEqual(classify(200, "<html>fine</html>", None), "ok")
+        self.assertEqual(classify(429, "", None), "rate_limited")
+        self.assertEqual(classify(403, "403 blocked-by-allowlist", None), "allowlist_blocked")
+        self.assertEqual(classify(403, "go away", None), "forbidden")
+        self.assertEqual(classify(200, "Just a moment...", None), "challenge")
+        self.assertEqual(classify(500, "", None), "http_error")
+        self.assertEqual(classify(None, "", "timed out"), "network_error")
 
 
 if __name__ == "__main__":

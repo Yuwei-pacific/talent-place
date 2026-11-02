@@ -12,11 +12,15 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import stat as stat_mod
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +29,31 @@ PACKED_ENGINE = SCRIPTS.parent / "engine"
 REPO_ENGINE = SCRIPTS.parents[4] / "engine" if len(SCRIPTS.parents) > 4 else PACKED_ENGINE
 MIN_PYTHON = (3, 10)
 LABELS = ("normal", "excel-open", "online-only")
+
+# The same request the engine sends: engine/src/discovery/http.ts.
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,it;q=0.8",
+}
+# http.ts's BLOCKED_MARKERS, unwidened: "captcha" alone matches legitimate pages.
+CHALLENGE_MARKERS = (
+    "cf-challenge",
+    "challenge-platform",
+    "unusual traffic",
+    "access denied",
+    "request blocked",
+    "just a moment...",
+    "verifying you are human",
+)
+DEFAULT_LINKEDIN = "https://www.linkedin.com"
+# A page the engine verified on the 2026-11-02 run (its employer-checks.csv).
+DEFAULT_EMPLOYER = "https://www.re-lab.it/career-archive/career-single?career=service-design-intern-157064"
+SEARCH_PATH = "/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=design+internship&location=Milan&start=0"
+RETRY_AFTER_MINUTES = 20
 
 
 def engine_dir() -> Path:
@@ -238,6 +267,62 @@ def cmd_state(args: argparse.Namespace) -> None:
     record(master, test_id, "PASS" if passed else "FAIL", detail)
 
 
+def classify_response(status: int | None, body: str, error: str | None) -> str:
+    """Why a page came back as it did. A 403 from the sandbox's own proxy and a 403
+    from the site are different problems with different owners, so they stay apart."""
+    if error is not None or status is None:
+        return "network_error"
+    if status == 429:
+        return "rate_limited"
+    if status == 403:
+        return "allowlist_blocked" if "blocked-by-allowlist" in body else "forbidden"
+    head = body[:20000].lower()
+    if any(marker in head for marker in CHALLENGE_MARKERS):
+        return "challenge"
+    return "ok" if 200 <= status < 300 else "http_error"
+
+
+def fetch(url: str) -> tuple[str, str]:
+    """(classification, body). Never raises for anything the network can do."""
+    request = urllib.request.Request(url, headers=HEADERS)
+    try:
+        with urllib.request.urlopen(request, timeout=25) as res:
+            body = res.read().decode("utf-8", "replace")
+            return classify_response(res.status, body, None), body
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")
+        return classify_response(exc.code, body, None), body
+    except (OSError, ValueError) as exc:
+        return classify_response(None, "", f"{type(exc).__name__}: {exc}"), ""
+
+
+def cmd_net(args: argparse.Namespace) -> None:
+    master = require_test_folder(args.master)
+    base = args.linkedin_base.rstrip("/")
+    detail: dict = {"posting": "skipped"}
+
+    # At most two requests to LinkedIn, and none after it has said 429.
+    search, page = fetch(base + SEARCH_PATH)
+    job_id = re.search(r"urn:li:jobPosting:(\d+)", page) if search == "ok" else None
+    detail["search"] = "no_cards" if search == "ok" and not job_id else search
+    if job_id:
+        time.sleep(args.pause)
+        posting, page = fetch(f"{base}/jobs-guest/jobs/api/jobPosting/{job_id.group(1)}")
+        has_text = "show-more-less-html__markup" in page
+        detail["posting"] = "no_description" if posting == "ok" and not has_text else posting
+
+    detail["employer"] = fetch(args.employer_url)[0]
+
+    if "rate_limited" in (detail["search"], detail["posting"]):
+        detail["retry_after_minutes"] = RETRY_AFTER_MINUTES
+        status = "INCONCLUSIVE"
+    elif all(detail[key] == "ok" for key in ("search", "posting", "employer")):
+        status = "PASS"
+    else:
+        status = "FAIL"
+    record(master, "T3", status, detail)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -245,6 +330,13 @@ def build_parser() -> argparse.ArgumentParser:
     env = sub.add_parser("env", help="T2: what can run here")
     env.add_argument("--master", required=True)
     env.set_defaults(func=cmd_env)
+
+    net = sub.add_parser("net", help="T3: can this sandbox reach LinkedIn and an employer page")
+    net.add_argument("--master", required=True)
+    net.add_argument("--linkedin-base", default=DEFAULT_LINKEDIN)
+    net.add_argument("--employer-url", default=DEFAULT_EMPLOYER)
+    net.add_argument("--pause", type=float, default=10.0)
+    net.set_defaults(func=cmd_net)
 
     fs = sub.add_parser("fs", help="T4 and T5-write: the attached folders")
     fs.add_argument("--master", required=True)
