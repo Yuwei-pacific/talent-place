@@ -10,12 +10,14 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import unittest
+import zipfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -301,6 +303,83 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(classify(200, "Just a moment...", None), "challenge")
         self.assertEqual(classify(500, "", None), "http_error")
         self.assertEqual(classify(None, "", "timed out"), "network_error")
+
+
+class TestBuild(unittest.TestCase):
+    """Built once: it runs `npm run build`. Tested from the zip, as the colleague gets it."""
+
+    @classmethod
+    def setUpClass(cls):
+        res = subprocess.run(
+            [sys.executable, str(HERE / "build.py")], capture_output=True, text=True, timeout=300
+        )
+        if res.returncode != 0:
+            raise AssertionError(res.stdout + res.stderr)
+        cls.zip_path = HERE / "dist" / "talent-placement-probe.zip"
+        cls.names = zipfile.ZipFile(cls.zip_path).namelist()
+        cls.root = Path(tempfile.mkdtemp(prefix="probe-unzipped-"))
+        zipfile.ZipFile(cls.zip_path).extractall(cls.root)
+        cls.plugin = cls.root / "talent-placement-probe"
+        cls.skill = cls.plugin / "skills" / "probe"
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.root, ignore_errors=True)
+
+    def test_zip_layout(self):
+        self.assertEqual({name.split("/")[0] for name in self.names}, {"talent-placement-probe"})
+        self.assertIn("talent-placement-probe/.claude-plugin/plugin.json", self.names)
+        self.assertIn("talent-placement-probe/skills/probe/SKILL.md", self.names)
+        self.assertFalse((self.plugin / "bin").exists(), "a top-level bin/ stops Cowork installing it")
+
+    def test_zip_limits(self):
+        info = zipfile.ZipFile(self.zip_path).infolist()
+        self.assertLess(len(info), 5000)
+        self.assertLess(sum(i.file_size for i in info), 200 * 1024 * 1024)
+
+    def test_no_test_files_shipped(self):
+        self.assertFalse([n for n in self.names if "test_sync_export" in n or "__pycache__" in n or ".DS_Store" in n])
+
+    def test_staged_engine_runs_from_other_cwd(self):
+        res = subprocess.run(
+            ["node", str(self.skill / "engine" / "lib" / "cli.js")],
+            capture_output=True, text=True, cwd=tempfile.gettempdir(),
+        )
+        self.assertIn("discover", res.stdout + res.stderr)
+        self.assertIn("read", res.stdout + res.stderr)
+        self.assertNotIn("SyntaxError", res.stderr)
+
+    def test_engine_finds_its_data(self):
+        self.assertTrue((self.skill / "engine" / "data" / "aggregators.csv").exists())
+
+    def test_vendored_openpyxl_imports(self):
+        vendor = self.skill / "engine" / "python" / "vendor"
+        code = f"import sys; sys.path.insert(0, {str(vendor)!r}); import openpyxl; print(openpyxl.__file__)"
+        res = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("vendor", res.stdout)
+
+    def test_probe_uses_staged_engine(self):
+        master = self.root / "TEST staged"
+        master.mkdir()
+        script = self.skill / "scripts" / "probe.py"
+        self.assertEqual(run_probe("env", "--master", master, script=script).returncode, 0)
+        row = report(master)["T2"]
+        self.assertEqual(row["status"], "PASS", row)
+        self.assertEqual(row["detail"]["openpyxl_source"], "vendor")
+
+    def test_skill_frontmatter(self):
+        text = (self.skill / "SKILL.md").read_text(encoding="utf-8")
+        head = text.split("---")[1]
+        self.assertRegex(head, r"(?m)^name: probe$")
+        description = re.search(r"(?m)^description: (.+)$", head).group(1)
+        self.assertLessEqual(len(description), 1024)
+        self.assertIn("${CLAUDE_SKILL_DIR}/scripts/probe.py", text)
+
+    def test_full_run_never_publishes(self):
+        text = (self.skill / "references" / "full-run.md").read_text(encoding="utf-8")
+        self.assertIn("--resume", text)
+        self.assertIn("Do not run `stage` or `append`", text)
 
 
 if __name__ == "__main__":

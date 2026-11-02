@@ -1,0 +1,6 @@
+{
+  "name": "talent-placement-probe",
+  "displayName": "Talent Placement Probe",
+  "version": "0.1.0",
+  "description": "One-off environment test for the Talent Placement job search: checks whether this computer can run it, and writes the results to a test folder. It writes nothing outside a folder whose name contains TEST."
+}
