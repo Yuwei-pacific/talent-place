@@ -36,11 +36,17 @@ import { atsAdapter, type AtsBoard } from './ats.js';
  * These are CONSERVATIVE CHOICES, not descriptions of current behaviour. This
  * engine previously had no rate at all — `fetchText` sets no delay and the
  * adapters await serially, so at ~300ms p50 the LinkedIn guest adapter ran at
- * roughly 3.3 req/s. 0.625 is deliberately far below that. Do not "restore"
- * the old number: it was never a decision, it was the absence of one.
+ * roughly 3.3 req/s. Do not "restore" the old number: it was never a decision,
+ * it was the absence of one.
+ *
+ * LinkedIn went from 0.625 to 0.1 after 2026-11-02, when 1.6 s and 3.3 s gaps each
+ * reached 429 after 18 or 19 successes. On 2026-11-03 a gap of about 15.5 s gave 78
+ * of 78, on the same network and after 17 hours of rest, so pace and rest are not
+ * separated. 10 s itself is less proven: on 11-02 it gave 11 successes, one hour
+ * after a block. The limiter's jitter makes the real gap 10 to 12.5 s.
  */
 export const DEFAULT_RATES: Record<string, number> = {
-  'linkedin-guest': 0.625, // 1600ms gap
+  'linkedin-guest': 0.1, // 10 s gap
   ats: 2, // documented public JSON APIs, meant to be polled
   employer: 2,
 };

@@ -92,7 +92,7 @@ npm run build && node lib/cli.js admit --fields <run dir>/declared.json --out <r
 
 ### A run nobody has to watch
 
-LinkedIn's guest API began answering 429 after about 20 requests in late October, on either pace tried and on two networks, and answers again within minutes. Three fields in the run config and one command make that a wait rather than an end:
+LinkedIn's guest API began answering 429 after about 20 requests in late October, at gaps of 1.6 s and 3.3 s and on two networks, and answers again within minutes. The default gap is now 10 s, for `discover` and `read` alike. A gap of about 15.5 s gave 78 of 78 on 2026-11-03, but after 17 hours of rest and on one morning, so neither that result nor 10 s is proof of a safe pace. Three fields in the run config and one command make a 429 a wait rather than an end:
 
 ```bash
 # run.json: "recencyDays": 7, "cooldownMinutes": 20, "maxCooldowns": 12
