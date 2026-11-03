@@ -101,6 +101,7 @@ ROLE_COLUMNS = [
     "Previously Contacted?",
     "Verification Status",
     "Posted / Result Age",
+    "First Seen",
     "Search Query",
     "Date Checked",
 ]
@@ -262,6 +263,8 @@ EVIDENCE_FILLED_COLUMNS = ["Alternate / Portal URLs", "Posted / Result Age", "Se
 # --------------------------------------------------------------------------
 
 EVIDENCE_COLUMNS = ["url", "posted", "alternate_urls", "search_query"]
+# Optional, so a sidecar from before it existed still loads. `build-tsv` writes it.
+EVIDENCE_OPTIONAL = ["first_seen"]
 
 # Written by `cli verify`: one row per employer URL actually probed.
 CHECK_COLUMNS = ["url", "label", "status", "reachable", "has_apply", "has_intern_signal", "title", "detail", "elapsed_ms"]
@@ -332,13 +335,14 @@ def _read_sidecar(path: Path, columns: list[str]) -> dict:
     if missing:
         raise StageError("evidence file %s is missing column(s): %s" % (path, ", ".join(missing)))
     idx = {c: header.index(c) for c in columns}
+    idx.update({c: header.index(c) for c in EVIDENCE_OPTIONAL if c in header})
     out = {}
     for row in reader:
         if not row or not row[0].strip():
             continue
         key = norm_role_url(row[0])
         if key:
-            out[key] = {c: (row[idx[c]].strip() if idx[c] < len(row) else "") for c in columns}
+            out[key] = {c: (row[i].strip() if i < len(row) else "") for c, i in idx.items()}
     return out
 
 
@@ -690,6 +694,7 @@ def explode_roles(
                     # company answer rather than inheriting a neighbour's.
                     "Verification Status": check.get("status") or col("Verification Status"),
                     "Posted / Result Age": ev.get("posted", ""),
+                    "First Seen": ev.get("first_seen", ""),
                     "Search Query": ev.get("search_query", ""),
                     "Date Checked": col("Last Checked"),
                 }
@@ -911,6 +916,24 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     report["dirs"] = {"_machine": str(d / "_machine"), "backups": str(d / "_machine" / "backups")}
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0 if report["ok"] else 1
+
+
+def cmd_build_tsv(args: argparse.Namespace) -> int:
+    import build_tsv  # It imports this module for the column lists.
+
+    try:
+        summary = build_tsv.build(
+            args.run,
+            a2_path=args.a2,
+            history=args.history,
+            date=args.date or datetime.now().strftime("%Y-%m-%d"),
+            carry=args.carry,
+        )
+    except build_tsv.BuildError as exc:
+        print(json.dumps({"refused": str(exc)}, ensure_ascii=False, indent=2))
+        return 2
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0
 
 
 def cmd_stage(args: argparse.Namespace) -> int:
@@ -2248,6 +2271,14 @@ def main() -> int:
         help="stage rows whose values do not fit their column, recording the problems in the manifest",
     )
     p.set_defaults(func=cmd_stage)
+
+    p = sub.add_parser("build-tsv", help="turn a run's verdicts into A4's TSV, from the run's own data")
+    p.add_argument("--run", required=True)
+    p.add_argument("--a2", required=True)
+    p.add_argument("--history", required=True)
+    p.add_argument("--carry", help="the previous run's run.tsv, whose roles Roles.xlsx must keep")
+    p.add_argument("--date", help="YYYY-MM-DD, default today")
+    p.set_defaults(func=cmd_build_tsv)
 
     for name, fn, helptext, needs_history in [
         ("init-review", cmd_init_review, "create Review.xlsx seeded from canonical history", True),

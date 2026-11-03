@@ -106,6 +106,23 @@ node lib/cli.js read --cards <shortlist.json> --out <dir> --cooldown-minutes 20
 - `read` replaces the run-directory `fetch-descriptions.py`. It keeps what `descriptions.json` already holds, and `read-report.json` carries the same health record as a source.
 - `health.events429` says when each 429 came. The 2026-11-02 run could not tell one long block from several short ones because nothing recorded it. It does not record the network, and two networks gave different counts.
 
+### One entry point
+
+```bash
+python3 python/job_run.py prepare --master "Strategic design ED.28"
+# the agent picks a shortlist.json from cards.json
+python3 python/job_run.py read    --master "..." --run <name>
+# the agent reads each description and writes verdicts.json
+python3 python/job_run.py publish --master "..." --run <name>            # stops before Review.xlsx
+python3 python/job_run.py publish --master "..." --run <name> --confirm  # after a person says yes
+```
+
+`prepare` builds `run.json` from A2 and A3, so nobody chooses a search list on the day, and computes `recencyDays` from the last run whose sources all finished: a fixed window quietly misses postings when the gap was longer. It reports each A2 area as searched or not searched, because "found nothing" and "never asked" are different coverage. A stop prints `{"stop": <code>, "detail": ...}` and exits 3.
+
+A verdict names a card by `id` and states `label`, `area`, `quotes`, `reason`, optionally `score`, `company`, `workMode`, `requiredLanguages` + `languageRequirement`, and `ground` for an exclusion (`admit` when `admit` should be the one to exclude it). `build-tsv` takes the URL, title, place and date from the card and refuses, writing nothing, on an unknown id, a label with no read description, a quote not in the description, an area A2 lacks or rules out, a closed posting, a URL neither on the card nor in `employer-checks.csv`, and a place with no country unless the verdict states one found in the posting. On 2026-11-03 replaying that day's real verdicts through it reproduced the hand-built TSV and caught a wrong `In Italy?` in the hand-built one.
+
+`publish` passes the previous run's `final/run.tsv` as `--carry`. `stage` regenerates `Roles.xlsx` from one TSV and `append` adds no role to an existing row, so a new role at a company already in `Review.xlsx` lives only in `Roles.xlsx`, and the next run would erase it. `First Seen` in `Roles.xlsx` says which roles are new.
+
 ### Verifying, before reaching for a browser
 
 ```bash
@@ -278,6 +295,8 @@ Indeed direct HTTP is 403 from datacenter clients, so Indeed stays a runtime-dec
 | A Master's professional areas | `config/<Master> ED.NN>/A2-profilo-*.md` |
 | Cohort constraints, `history_file` | `config/<Master> ED.NN>/A3-cohort.yaml` |
 | A new discovery source | `src/discovery/` + add to `tsconfig` `include` + a `test/*-smoke.mjs` appended to the `package.json` chain |
+| How a run's verdicts become the TSV | `python/build_tsv.py`. The verdict shape is documented in «One entry point» above |
+| The steps of a run and their stop codes | `python/job_run.py` |
 | Which boards and agencies are not employers | `engine/data/aggregators.csv` — `pattern;note`, where `pattern` is `normCompany` output (the test asserts every entry is a fixed point of it, and that the file is found where the code looks) |
 | An A1 §44 exclusion ground, or the work-mode vocabulary it gates on | `src/admissibility.ts` → `AdmissibilityGround` / `WORK_MODES`, **and** `config/A4` §Destinazione dei risultati — a ground with no home in A4 is a rule only the code knows |
 | An ATS API's workplace field, or which source can declare one | `src/admissibility.ts` → `workModeFrom` (the spelling fold), **and** `WORK_MODE_DECLARABLE` in `src/discovery/ats.ts`. A source that cannot declare one leaves `fully-remote` dead for its whole branch, which the run then reports as `workModeUndeclarable` |
