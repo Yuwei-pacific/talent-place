@@ -24,7 +24,7 @@ Yuwei 可能在 **1 个月内**交接或离开。之后要由不懂技术、使�
 - **`config/` 原地不动：** A1–A4 不复制进插件，运行时把 `talent-place/config` 作为附加文件夹读取。这样符合“不留第二份 A2/A3”的规则，同事也能直接编辑 A2/A3。
 - **写入前必须确认：** `append` 先 dry-run，显示新增公司摘要，由同事确认后才写入。
 - **Indeed：** 沿用 2026-11-02 的做法，用 Claude 的 Indeed 连接器（只覆盖意大利），`cli.js indeed` 计算必填的统计行。连接器不可用时写 `Unavailable`。
-- **保存搜索进度（之前写的“不做续跑”是错的）：** PR 4 已实现单次运行内的等待和续跑（`cooldownMinutes`、`checkpoint.jsonl`、`--resume`）。详见阶段 1 第 5 项。`stage` 每次重新生成 `Roles.xlsx` 的现有行为不变，所以 `Roles.xlsx` 只显示最近一次运行；已写入 `Review.xlsx` 的不受影响。
+- **保存搜索进度（之前写的“不做续跑”是错的）：** PR 4 已实现单次运行内的等待和续跑（`cooldownMinutes`、`checkpoint.jsonl`、`--resume`）。详见阶段 1 第 5 项。`stage` 每次重新生成 `Roles.xlsx`，而已有公司的新岗位只写在这里（`append` 不改已有行）。2026-11-02 和 11-03 两次都要手动并入上一次的岗位才不丢，所以 `build-tsv` 要接管这一步，见阶段 1 第 3 项。
 - **ATS 看板不列入：** 最近的 `run.json` 也没有配置 `atsBoards`，这次不增加。
 - **搜索范围的例外（deroga）由负责人决定：** 像 11-02 的“只读 7 天内的职位”这种例外，只有同事明确要求才用，并写入 `run-derogations.json`；默认不用。
 
@@ -49,7 +49,7 @@ Yuwei 可能在 **1 个月内**交接或离开。之后要由不懂技术、使�
 | 3 | 联网：LinkedIn guest 搜索和 `jobPosting`、一个雇主页面 | 返回真实内容。Team Owner 可能要先配置允许的域名 |
 | 4 | 同时附加 `talent-place/config` 和 OneDrive 里的 Master 测试文件夹 | 都能读写 |
 | 5 | 在挂载的 OneDrive 文件夹里写文件 | `os.replace` 成功、同步上云、Excel 能打开；文件被 Excel 打开时和“仅在线”时，guard 能拒绝而不是崩溃 |
-| 6 | 跑一次完整搜索（读约 60 条描述） | **一条命令能否连续跑 2–3 小时**（沙盒超时、电脑休眠、中断后 `--resume`）；额度消耗；`health.events429` 和 `cooldowns`，这是等待机制第一次碰到真实的 LinkedIn 限流 |
+| 6 | 跑一次完整搜索（读约 60 条描述） | **一条命令能否连续跑约 1 小时，遇到多轮等待时更久**（沙盒超时、电脑休眠、中断后 `--resume`）；额度消耗；`health.events429` 和 `cooldowns` |
 | 7 | Team 账号里的 Indeed 连接器 | 可用，或确认为 `Unavailable` |
 
 **判定：**
@@ -61,14 +61,13 @@ Yuwei 可能在 **1 个月内**交接或离开。之后要由不懂技术、使�
 
 ## 阶段 1：引擎改动（约 1 周）
 
-**0. 已完成**：PR 3（EU 修复、每个 A2 领域轮流查询）和 PR 4（等待、续跑、`read`、`recencyDays`、Strategic 精简为 20 个关键词）都已合并。
+**0. 已完成**：PR 3（EU 修复、每个 A2 领域轮流查询）、PR 4（等待、续跑、`read`、`recencyDays`、Strategic 精简关键词）和 PR 5（LinkedIn 默认间隔 10 秒、Strategic 23 个关键词）都已合并。
 
 **1. Windows / 沙盒兼容**：`engine/python/synced_fs.py`、`sync_export.py`
-- `is_dataless()`（第 91 行）和 `describe()`（第 235 行）直接读 `st.st_blocks`，Windows 上没有这个字段，会报错。改成按平台判断；Windows 上用文件属性识别“仅在线”文件。
+- `st_blocks` 的崩溃已修复，随实测工具分支合并。
 - `cmd_doctor`（第 817 行起）判断 OneDrive 的检查依赖 macOS 的 `xattr`。按平台改写，并修掉已知的误报（见记忆 `doctor-mount-check-false-failure`）。判断不了时报告“无法确认”，不算失败。
 
 **2. 读取描述**：主体已由 PR 4 完成（`cli.js read`、`engine/src/read-postings.ts`）。剩下：
-- 修 `read` 把空页面算成“已读”、410 每次重新请求的问题（已列入实测工具计划的 Task 2）。
 - 跨次运行的缓存：`descriptions.json` 现在按运行目录保存，换一个目录就会重读。改成 Master 级的 `_machine/descriptions/`。
 - 未读的进“未解决”，之后可从雇主页面读（A1 允许）。
 
@@ -77,6 +76,8 @@ Yuwei 可能在 **1 个月内**交接或离开。之后要由不懂技术、使�
 - 输入：`cards.json`、`employer-checks.csv`、`verdicts.json`。判断的字段形状以 `2026-09-24` 和 `2026-11-02` 的 `verdicts.json` 为参考。
 - URL、职位名、发布日期**从卡片数据取**。其他 URL 必须出现在 `employer-checks.csv` 或卡片的 `alternateUrls` 里。引用不存在的卡片 id 时拒绝。
 - 按公司聚合成 22 列 TSV，并处理值里的 `|`（2026-09-24 那次 `roles_out` 多算 1 的原因）。
+- 引文必须能在对应的描述里找到（2026-11-03 手动校验过，要进代码）。
+- 用 `--carry <上一次的 run.tsv>` 把上一次的岗位并入本次 TSV，同公司的合并并重新编号，这样 `Roles.xlsx` 不会丢岗位。
 - 只有 `pertinente` 和 `adiacente` 进 TSV；其余写入 `exclusions` 或 `unresolved.json`。
 
 **4. 一个流程入口**（如 `engine/python/job_run.py`）
@@ -84,7 +85,7 @@ Yuwei 可能在 **1 个月内**交接或离开。之后要由不懂技术、使�
 - `publish --run <目录>`：`admit` → `build-tsv` → `stage` → 检查 `evidence_join` 和 `roles_out` → `append --dry-run`，停下等确认；确认后再 `append`。
 - **防止目录打错：** `--master` 只能是 `config/` 下已有的文件夹，目标文件夹不存在时拒绝，不自动创建（目前打错 `--dir` 会静默新建）。
 - **不一致就停：** A2 和 A3 的 `master_id` 不一致就停（A1 规定）。
-- **run.json 由代码组装，不靠 AI 临场判断：** 20 个词 × 2 个实习词 × 3 个地点是 120 次，AI 按 A1 把 `tirocinio` 加回来就是 180 次，所以 `prepare` 直接从 A2 的“Termini di ricerca”和 A3 生成，并原样复制 `falseFriends`。不新增配置文件。实习词列表怎么定、次要词何时运行，见“需要确认”。
+- **run.json 由代码组装，不靠 AI 临场判断：** 23 个词 × 2 个实习词 × 2 个地点是 92 次，加回 `Milan` 是 138 次，AI 按 A1 再把 `tirocinio` 加回来就是 207 次，所以 `prepare` 直接从 A2 的“Termini di ricerca”和 A3 生成，并原样复制 `falseFriends`。不新增配置文件。实习词列表怎么定、次要词何时运行，见“需要确认”。
 - **`recencyDays` 自动计算：** 取“距上次成功覆盖的天数 + 重叠几天”，从未跑过就不设。固定写 7 会在隔了几周时静默漏掉职位，也不符合 A1（搜索不自动限于最新发布的职位）。窗口写进报告。
 - **长时间运行：** `prepare` 用 `--resume` 接上未完成的运行目录。Windows 上防止休眠的办法按阶段 0 第 6 项的结果定（`caffeinate` 只有 Mac 才有）。
 - 异常时输出**原因代码**并停止，意大利语说明由 skill 负责。
@@ -162,8 +163,8 @@ plugin/talent-placement/
 
 - **时间很紧：** 各阶段加起来约 3.5–4 周，几乎没有余量。Team 方案审批一拖，就得按上面的顺序砍。
 - **持续积累不会让 LinkedIn 请求大幅下降：** 上限约 17%，主要价值是保留进度和少花 AI 额度。
-- **一次搜索要跑很久：** 按每轮约 20 个请求、等 20 分钟估算，120 次搜索约 2 小时，再读 60 条描述约 1 小时（估算，未实测）。如果等待之后仍然跑不完，只能把官网来源提前。
-- **等待机制未经实战：** PR 4 的 cooldown 只用本地服务器测过，还没碰到过真实的 LinkedIn 限流。
+- **一次搜索的时长（2026-11-03 实测一次，不是保证）：** 10 秒间隔下，92 次搜索 37 分钟（其中等待 20 分钟），读 65 条描述 12 分钟。163 个请求里有 6 个 429，等了一轮。网络和当天情况都可能改变这个结果。如果等待之后仍然跑不完，只能把官网来源提前。
+- **等待机制只实战过一次：** 2026-11-03 它第一次碰到真实的 429 并跑完了全部查询，但还没遇到过连续多轮被挡的情况。
 - **分发：** 按人分享的插件只在分享者继续分享时有效，所以交接时要发布到组织。文档没写明发布者账号停用后会怎样，交接前要确认。
 - **LinkedIn：** guest 接口不是官方接口。它变了之后插件无法自我修复，需要找懂技术的人。`diagnostica` 只能说清楚坏在哪里。
 - **AI 判断：** 质量没有自动评估，靠同事在 `Review.xlsx` 里把关。
@@ -175,7 +176,7 @@ plugin/talent-placement/
 - **隐私：** 负责隐私的同事确认机构账号可以使用。现有两份 A3 没有个人学生数据；`Review.xlsx` 里有联系人和备注，由脚本读取，skill 也规定不主动读这些列，但 `append` 摘要会显示公司名。如果隐私方面不同意使用 Claude，这个方案就走不通，要尽早问。
 - 能否找到一位兜底的技术联系人（IT 或外部），哪怕只是出问题时才联系。
 - 第一个新 Master 是哪个，材料何时能到。
-- **Accessory 的关键词（Yuwei / Talent Placement 决定）：** 还没精简，09-22 发了 342 个请求，按每轮约 20 个算要 17 轮左右，超过默认 12 次等待上限。要么精简，要么调高上限。
+- **Accessory 的关键词（Yuwei / Talent Placement 决定）：** 还没精简，09-22 发了 342 个请求，10 秒间隔下至少约 1 小时，遇到等待会更久。限流按 11-03 的频率（163 个请求 6 个 429）估算不会用完 12 次等待，但这只是一次的数据。要么精简，要么接受时长。
 - **实习词和次要词（Yuwei / Talent Placement 决定）：** `tirocinio` 要不要进默认查询（09-24 回放：同时去掉会丢 2/47）；次要词多久跑一次，A1 写着“不要只跑列表前面的词”，目前没有机制会跑它们。
 
 ## 验证
