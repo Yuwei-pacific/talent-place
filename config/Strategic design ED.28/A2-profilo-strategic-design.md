@@ -77,9 +77,9 @@ La ricerca può esplorare le aree da confermare dichiarandole come ipotesi opera
 
 **Riferimento didattico o progetto di esempio:** Da indicare dal team didattico.
 
-**Termini di ricerca — a cura di Talent Placement:** transformation, operating model
+**Termini di ricerca — a cura di Talent Placement:** transformation, operating model, change management
 
-**Termini secondari, non eseguiti di default dal 2026-11-02:** change management, process excellence
+**Termini secondari, non eseguiti di default dal 2026-11-02:** process excellence
 
 ### Product / UX
 
@@ -113,9 +113,9 @@ La ricerca può esplorare le aree da confermare dichiarandole come ipotesi opera
 
 **Riferimento didattico o progetto di esempio:** Da indicare dal team didattico.
 
-**Termini di ricerca — a cura di Talent Placement:** CRM, analisi clienti
+**Termini di ricerca — a cura di Talent Placement:** CRM, analisi clienti, customer intelligence
 
-**Termini secondari, non eseguiti di default dal 2026-11-02:** customer intelligence, consumer insight, segmentation
+**Termini secondari, non eseguiti di default dal 2026-11-02:** consumer insight, segmentation
 
 ### Consulting
 
@@ -131,9 +131,9 @@ La ricerca può esplorare le aree da confermare dichiarandole come ipotesi opera
 
 **Riferimento didattico o progetto di esempio:** Da indicare dal team didattico.
 
-**Termini di ricerca — a cura di Talent Placement:** project management, business analyst
+**Termini di ricerca — a cura di Talent Placement:** project management, business analyst, consulting
 
-**Termini secondari, non eseguiti di default dal 2026-11-02:** consulting, consultant, miglioramento processi
+**Termini secondari, non eseguiti di default dal 2026-11-02:** consultant, miglioramento processi
 
 ### Sustainability
 
