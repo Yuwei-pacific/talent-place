@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Filesystem guards for writing into a macOS OneDrive / SharePoint sync folder.
+"""Filesystem guards for writing into a OneDrive / SharePoint sync folder.
 
-The target is a macOS File Provider domain, not a network mount. Three facts
-about it drive everything here (all measured on this machine, not assumed):
+The guards run on macOS and Windows; `is_dataless` asks each in its own terms.
+On macOS the target is a File Provider domain, not a network mount. Three facts
+about it drive everything here (all measured on a Mac, not assumed; the Windows
+attributes below come from its documentation and await a real OneDrive folder):
 
 1. A dataless (online-only) file reports its FULL st_size while st_blocks == 0,
    with UF_DATALESS set. So ``st_size > 0`` does NOT mean the bytes are local,
@@ -31,6 +33,10 @@ from typing import Callable
 
 # macOS: set on a file whose content is not present locally.
 UF_DATALESS = 0x40000000
+
+# Windows: the attributes that mean a file's content is not on this machine.
+# FILE_ATTRIBUTE_OFFLINE | RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS.
+WIN_ONLINE_ONLY_ATTRS = 0x1000 | 0x40000 | 0x400000
 
 # Excel creates a "~$Name.xlsx" owner file next to a workbook it has open.
 EXCEL_LOCK_PREFIX = "~$"
@@ -84,11 +90,13 @@ def is_dataless(path: str | Path) -> bool:
         return False
     if not stat_mod.S_ISREG(st.st_mode):
         return False
+    if getattr(st, "st_file_attributes", 0) & WIN_ONLINE_ONLY_ATTRS:
+        return True
     if getattr(st, "st_flags", 0) & UF_DATALESS:
         return True
     # Belt and braces: a regular non-empty file with no allocated blocks is
-    # online-only on this mount.
-    return st.st_size > 0 and st.st_blocks == 0
+    # online-only on this mount. Windows reports no st_blocks at all.
+    return st.st_size > 0 and getattr(st, "st_blocks", None) == 0
 
 
 def excel_lock_present(path: str | Path) -> Path | None:
@@ -232,7 +240,7 @@ def describe(path: str | Path) -> dict:
     out.update(
         {
             "size": st.st_size,
-            "blocks": st.st_blocks,
+            "blocks": getattr(st, "st_blocks", None),
             "mtime": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
             "dataless": is_dataless(p),
         }

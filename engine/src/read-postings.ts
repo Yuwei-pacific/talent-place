@@ -22,7 +22,11 @@ export interface ReadPosting extends Card {
 
 export interface ReadReport {
   cards: number;
+  /** Pages that held posting text. A 200 without any is `empty`, not this. */
   read: number;
+  /** Answered 200 with no description block: a sign-in wall, or LinkedIn's markup
+   *  changed. Asked for again next run, because nothing was learned. */
+  empty: number;
   gone: number;
   alreadyRead: number;
   withoutId: number;
@@ -41,7 +45,7 @@ export async function readPostings(
       if (d.sourceJobId) done.set(d.sourceJobId, d);
     }
   }
-  const report: ReadReport = { cards: cards.length, read: 0, gone: 0, alreadyRead: 0, withoutId: 0, unread: 0 };
+  const report: ReadReport = { cards: cards.length, read: 0, empty: 0, gone: 0, alreadyRead: 0, withoutId: 0, unread: 0 };
   const save = () => {
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, JSON.stringify([...done.values()], null, 1));
@@ -53,7 +57,8 @@ export async function readPostings(
       report.withoutId++;
       continue;
     }
-    if (done.get(id)?.desc || done.get(id)?.http === 404) {
+    const held = done.get(id);
+    if (held?.desc || held?.http === 404 || held?.http === 410) {
       report.alreadyRead++;
       continue;
     }
@@ -65,7 +70,8 @@ export async function readPostings(
     if (res.ok) {
       const { desc, closed } = parsePosting(res.text);
       done.set(id, { ...card, http: res.status, desc, closedOnPage: closed });
-      report.read++;
+      if (desc) report.read++;
+      else report.empty++;
       save();
     } else if (res.kind === 'gone') {
       done.set(id, { ...card, http: res.status ?? 404, desc: '', closedOnPage: null });

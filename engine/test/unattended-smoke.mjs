@@ -186,6 +186,29 @@ try {
   assert.equal(r2.seen.length, 0, 'a second run asks only for what it does not have');
   await r2.close();
 
+  // A 200 with no posting in it is not a read: a sign-in wall must not look like success.
+  const threeCards = join(dir, 'three.json');
+  writeFileSync(threeCards, JSON.stringify(['7', '8', '9'].map((id) => ({ ...cards[0], sourceJobId: id }))));
+  const readThree = (base, to) =>
+    runCli(['lib/cli.js', 'read', '--cards', threeCards, '--out', join(dir, to), '--rate', '1000', '--linkedin-base', base]);
+  const wall = await serve(() => [200, '<html>sign in to continue</html>']);
+  const walled = await readThree(wall.base, 'wall');
+  assert.equal(walled.status, 0, walled.stderr);
+  assert.match(walled.stdout, /read 0 new, 3 empty/);
+  const wallReport = JSON.parse(readFileSync(join(dir, 'wall', 'read-report.json'), 'utf-8'));
+  assert.equal(wallReport.read, 0);
+  assert.equal(wallReport.empty, 3);
+  await readThree(wall.base, 'wall');
+  assert.equal(wall.seen.length, 6, 'an empty page is asked for again on the next run');
+  await wall.close();
+
+  // A posting that is gone stays gone, whichever of the two statuses said so.
+  const gone = await serve(() => [410, 'gone']);
+  await readThree(gone.base, 'gone');
+  await readThree(gone.base, 'gone');
+  assert.equal(gone.seen.length, 3, 'a 410 is not asked for twice');
+  await gone.close();
+
   // The CLI: config reaches the source, and an old checkpoint is never picked up by accident.
   const cfgPath = join(dir, 'run.json');
   const runDir = join(dir, 'run');
