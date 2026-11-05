@@ -179,6 +179,24 @@ class TestState(ProbeCase):
         self.assertEqual(row["status"], "FAIL")
         self.assertEqual(row["detail"]["guard"], "allowed")
 
+    def test_state_system_refusing_the_write_is_a_pass(self):
+        # Measured on Windows 2026-11-05: no `~$` file, but the system stops the write.
+        self.make_review()
+        driver = (
+            "import os, runpy, sys\n"
+            "def refuse(*a, **k):\n"
+            "    raise PermissionError(13, 'in use')\n"
+            "os.replace = refuse\n"
+            f"sys.argv = ['probe.py', 'state', '--master', {str(self.master)!r}, '--label', 'excel-open']\n"
+            f"runpy.run_path({str(PROBE)!r}, run_name='__main__')\n"
+        )
+        res = subprocess.run([sys.executable, "-c", driver], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        row = report(self.master)["T5-excel-open"]
+        self.assertEqual(row["status"], "PASS", row)
+        self.assertEqual(row["detail"]["guard"], "allowed")
+        self.assertEqual(row["detail"]["replace_while_open"], "refused:locked_by_system")
+
     def test_state_missing_review_is_fail(self):
         self.assertEqual(self.state("normal").returncode, 0)
         self.assertEqual(report(self.master)["T5-normal"]["status"], "FAIL")
@@ -542,8 +560,8 @@ class TestInstructions(unittest.TestCase):
     results = (HERE / "RESULTS-template.md").read_text(encoding="utf-8")
 
     def test_files_are_kept_offline_before_the_first_test(self):
-        self.assertLess(self.skill.index("Mantieni sempre su questo dispositivo"), self.skill.index(" env --master"))
-        self.assertIn("Mantieni sempre su questo dispositivo", self.guide)
+        self.assertLess(self.skill.index("Conserva sempre in questo dispositivo"), self.skill.index(" env --master"))
+        self.assertIn("Conserva sempre in questo dispositivo", self.guide)
 
     def test_paths_resolve_where_they_are_used(self):
         self.assertIn('ENGINE` is `${CLAUDE_SKILL_DIR}/engine', self.skill)

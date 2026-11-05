@@ -105,8 +105,10 @@ def excel_lock_present(path: str | Path) -> Path | None:
     This is a HEURISTIC for a colleague editing on THIS machine. It cannot see
     a colleague editing on Windows in Excel for the web, and OneDrive does not
     sync ``~$`` files, so a remote lock is invisible until it becomes a
-    conflicted copy. It is paired with a pre-write backup and a caller-side
-    sidecar fallback precisely because it can be wrong in both directions.
+    conflicted copy. Excel on this same Windows machine left no such file for a
+    OneDrive workbook either (2026-11-05), so there it is the replace that gets
+    refused. It is paired with a pre-write backup and a caller-side sidecar
+    fallback precisely because it can be wrong in both directions.
     """
     p = Path(path)
     candidate = p.parent / f"{EXCEL_LOCK_PREFIX}{p.name}"
@@ -210,7 +212,13 @@ def write_atomically(
         # than the seconds a load+save takes.
         if guard and t.exists() and Fingerprint.of(t) != before:
             raise GuardFailure("changed_concurrently", str(t))
-        os.replace(tmp, t)
+        try:
+            os.replace(tmp, t)
+        except PermissionError as exc:
+            # Excel holding a OneDrive file on Windows: no `~$` file for the lock
+            # check to see, and this is where it surfaces. A refusal like any other,
+            # so every caller's handling of a refused write applies.
+            raise GuardFailure("locked_by_system", str(t)) from exc
     except BaseException:
         try:
             tmp.unlink()
