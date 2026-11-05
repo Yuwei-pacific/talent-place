@@ -48,9 +48,9 @@ It is the only command that writes into a file colleagues edit. Four rules, not 
 1. **Append-only** — values go into *empty* cells at the bottom; no existing cell is ever overwritten
 2. **Values only, never styles** — colour comes from conditional-formatting rules installed once by `color`, so the machine's recurring footprint is "add values to empty rows"
 3. **Backup first**, then temp file + `os.replace` in the same directory
-4. **Refuse rather than half-write** — on `~$` Excel lock, a dataless file, or a concurrent save it writes the sidecar and exits 0. A missed append costs one paste; a botched write costs a week.
+4. **Refuse rather than half-write** — on `~$` Excel lock, a dataless file, a concurrent save, or the system refusing the replace it writes the sidecar and exits 0. A missed append costs one paste; a botched write costs a week.
 
-The `~$` lock check is a **heuristic**: it sees a colleague editing on this machine, not one editing in Excel for the web, and OneDrive does not sync `~$` files. The pre-write backup is the actual safety net.
+The `~$` lock check is a **heuristic**: it sees a colleague editing on this machine, not one editing in Excel for the web, and OneDrive does not sync `~$` files. On 2026-11-05 Excel on a OneDrive workbook on Windows left no `~$` file at all, and Windows refused the replace with `PermissionError`, which `write_atomically` reports as `locked_by_system`, so it takes the sidecar path like any other refusal. The pre-write backup is the actual safety net.
 
 ## Commands
 

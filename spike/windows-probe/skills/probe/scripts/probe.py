@@ -292,13 +292,16 @@ def cmd_state(args: argparse.Namespace) -> None:
             data = review.read_bytes()
             synced_fs.write_atomically(review, lambda tmp: tmp.write_bytes(data), guard=False)
             detail["replace_while_open"] = "ok"
+        except synced_fs.GuardFailure as exc:
+            detail["replace_while_open"] = f"refused:{exc.reason}"
         except Exception as exc:
             detail["replace_while_open"] = type(exc).__name__
 
     if args.label == "normal":
         passed = detail["guard"] == "allowed"
     else:
-        passed = detail["guard"].startswith("refused:")
+        # Refused by the lock check, or by the system at the write: either stops it.
+        passed = detail["guard"].startswith("refused:") or detail.get("replace_while_open", "").startswith("refused:")
     record(master, test_id, "PASS" if passed else "FAIL", detail)
 
 

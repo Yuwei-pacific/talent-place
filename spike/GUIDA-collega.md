@@ -6,7 +6,7 @@ Questo test serve a capire se la ricerca stage può funzionare sul tuo computer.
 
 - Il tuo account Claude del team, il file `talent-placement-probe.zip` e il foglio `FOGLIO-risultati.md`.
 - Sul tuo computer, sincronizzate con OneDrive, due cartelle: `talent-place/config` e `jobSearch_outPut/TEST-probe`.
-- Clicca con il tasto destro su `TEST-probe` e scegli **Mantieni sempre su questo dispositivo**. Aspetta che la sincronizzazione finisca.
+- Clicca con il tasto destro su `TEST-probe` e scegli **Conserva sempre in questo dispositivo**. Aspetta che la sincronizzazione finisca.
 
 ## Come si fa
 

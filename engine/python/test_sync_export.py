@@ -244,6 +244,18 @@ class TestAtomicWrite(TmpDirCase):
         self.assertEqual(cm.exception.reason, "changed_concurrently")
         self.assertEqual(target.read_bytes(), b"colleague-saved-this")
 
+    def test_the_system_refusing_the_replace_is_a_refusal(self):
+        """Measured 2026-11-05: Excel holding a OneDrive file left no `~$` file, so the
+        lock check saw nothing, and Windows answered the replace with PermissionError."""
+        target = self.tmp / "Review.xlsx"
+        target.write_bytes(b"original")
+        with mock.patch.object(synced_fs.os, "replace", side_effect=PermissionError(13, "in use")):
+            with self.assertRaises(synced_fs.GuardFailure) as cm:
+                synced_fs.write_atomically(target, lambda p: p.write_bytes(b"new"))
+        self.assertEqual(cm.exception.reason, "locked_by_system")
+        self.assertEqual(target.read_bytes(), b"original")
+        self.assertEqual([p.name for p in self.tmp.iterdir()], ["Review.xlsx"], "the temp file must not stay behind")
+
     def test_backup_taken_before_overwrite(self):
         target = self.tmp / "Review.xlsx"
         target.write_bytes(b"precious")
@@ -1673,6 +1685,30 @@ class TestAppend(TmpDirCase):
         link_at = REVIEW_COLUMNS.index("Job Links") + 1
         self.assertEqual(ws.cell(5, link_at).value, "1. https://example.com/vecchio")
         self.assertIsNone(ws.cell(5, 1).value, "the company cell must still be empty")
+
+    def test_a_replace_the_system_refuses_ends_in_the_sidecar(self):
+        """What Excel on a OneDrive file does on Windows. It was a traceback: `append`
+        only knew GuardFailure, so the colleague got a crash and no sidecar."""
+        self.build([{"Company / Outreach Account": "Esistente Srl"}])
+        self.stage_run([self.new_company("Nuova Srl")])
+        review = self.tmp / "Review.xlsx"
+        before = review.read_bytes()
+        driver = (
+            "import os, sys, runpy\n"
+            "def refuse(*a, **k):\n"
+            "    raise PermissionError(13, 'in use')\n"
+            "os.replace = refuse\n"
+            f"sys.path.insert(0, {str(HERE)!r})\n"
+            f"sys.argv = ['sync_export.py', 'append', '--dir', {str(self.tmp)!r}]\n"
+            f"runpy.run_path({str(HERE / 'sync_export.py')!r}, run_name='__main__')\n"
+        )
+        proc = subprocess.run([sys.executable, "-c", driver], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        out = json.loads(proc.stdout)
+        self.assertEqual(out["appended"], 0)
+        self.assertEqual(out["reason"], "locked_by_system")
+        self.assertTrue((self.tmp / f"Review-additions-{out['run_id']}.csv").exists())
+        self.assertEqual(review.read_bytes(), before)
 
     def test_the_sidecar_carries_what_the_workbook_would_have_written(self):
         """The sidecar replaces a refused append, so it has to be as complete.
