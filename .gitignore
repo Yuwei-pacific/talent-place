@@ -21,3 +21,6 @@ Review-additions-*.csv
 
 # The probe plugin, built by spike/build.py.
 spike/dist/
+
+# The colleague plugin, built by plugin/build.py.
+plugin/dist/

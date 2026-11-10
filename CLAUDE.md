@@ -123,6 +123,19 @@ A verdict names a card by `id` and states `label`, `area`, `quotes`, `reason`, o
 
 `publish` passes the previous run's `final/run.tsv` as `--carry`. `stage` regenerates `Roles.xlsx` from one TSV and `append` adds no role to an existing row, so a new role at a company already in `Review.xlsx` lives only in `Roles.xlsx`, and the next run would erase it. `First Seen` in `Roles.xlsx` says which roles are new.
 
+`masters` lists the Masters a run can start for; `cards` prints a run's cards compactly and `shortlist --ids` writes `shortlist.json` by copying whole cards, so a card is never typed out again. Outside the repo the entry point finds `config/` from the current folder (`find_config_root`), or takes `--config-root`.
+
+### The colleague plugin
+
+```bash
+python3 plugin/build.py        # -> plugin/dist/talent-placement.zip, the file a colleague uploads
+python3 plugin/test_plugin.py  # builds, then tests the zip; not part of `npm test`
+```
+
+`plugin/talent-placement/` is what a non-technical colleague runs, in the **Code tab** of the Claude desktop app on Windows: on 2026-11-05 that tab reached LinkedIn and Cowork's Linux VM did not. Two skills: `cerca-stage` drives `job_run.py` from `masters` to `publish --confirm`, and `diagnostica` explains a stopped run. The build packs `engine/lib`, `engine/data`, `engine/python` and openpyxl into the `cerca-stage` skill; `config/` is **not** packed, so there is still one copy of A1–A4.
+
+The skill text is an interface. `test_plugin.py` asserts that every `Stop` code in `job_run.py` has a row in `references/arresti.md`, that every `JOB <command>` the skills name exists, and that the verdict guide names the builder's labels and fields. A new stop code or subcommand without its row fails there. This version uses no Indeed connector and resolves no `similar_name` deferral: it reports both. It has not yet run a whole search on Windows.
+
 ### Verifying, before reaching for a browser
 
 ```bash
@@ -296,7 +309,9 @@ Indeed direct HTTP is 403 from datacenter clients, so Indeed stays a runtime-dec
 | Cohort constraints, `history_file` | `config/<Master> ED.NN>/A3-cohort.yaml` |
 | A new discovery source | `src/discovery/` + add to `tsconfig` `include` + a `test/*-smoke.mjs` appended to the `package.json` chain |
 | How a run's verdicts become the TSV | `python/build_tsv.py`. The verdict shape is documented in «One entry point» above |
-| The steps of a run and their stop codes | `python/job_run.py` |
+| The steps of a run and their stop codes | `python/job_run.py`, **and** a row in `plugin/talent-placement/skills/cerca-stage/references/arresti.md` for each new code |
+| What a colleague's Claude is told to do, and in what words | `plugin/talent-placement/skills/*/SKILL.md`, then `python3 plugin/build.py` and upload the new zip: a published plugin does not update itself |
+| The verdict fields | `python/build_tsv.py`, **and** `plugin/talent-placement/skills/cerca-stage/references/verdetti.md` |
 | Which boards and agencies are not employers | `engine/data/aggregators.csv` — `pattern;note`, where `pattern` is `normCompany` output (the test asserts every entry is a fixed point of it, and that the file is found where the code looks) |
 | An A1 §44 exclusion ground, or the work-mode vocabulary it gates on | `src/admissibility.ts` → `AdmissibilityGround` / `WORK_MODES`, **and** `config/A4` §Destinazione dei risultati — a ground with no home in A4 is a rule only the code knows |
 | An ATS API's workplace field, or which source can declare one | `src/admissibility.ts` → `workModeFrom` (the spelling fold), **and** `WORK_MODE_DECLARABLE` in `src/discovery/ats.ts`. A source that cannot declare one leaves `fully-remote` dead for its whole branch, which the run then reports as `workModeUndeclarable` |

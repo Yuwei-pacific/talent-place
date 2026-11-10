@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """One entry point for a search run, so that nobody has to know the command order.
 
+    python3 python/job_run.py masters
     python3 python/job_run.py prepare --master "Strategic design ED.28"
+    python3 python/job_run.py cards     --master "..." --run <name>
+    python3 python/job_run.py shortlist --master "..." --run <name> --ids <id> ...
     python3 python/job_run.py read    --master "..." --run <name> [--shortlist file]
     python3 python/job_run.py publish --master "..." --run <name> [--confirm]
 
@@ -15,8 +18,10 @@ explains it to a colleague; the words belong to them.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -24,13 +29,18 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import build_tsv
-
 HERE = Path(__file__).resolve().parent
+# The plugin packs openpyxl beside the engine, for a computer that has none installed.
+VENDOR = HERE / "vendor"
+if VENDOR.is_dir() and str(VENDOR) not in sys.path:
+    sys.path.insert(0, str(VENDOR))
 ENGINE = HERE.parent
 CONFIG_ROOT = ENGINE.parent / "config"
 CLI = ENGINE / "lib" / "cli.js"
 SYNC = HERE / "sync_export.py"
+A1_NAME = "A1-regole-ricerca.md"
+
+import build_tsv  # noqa: E402  (after the vendor path)
 
 INTERNSHIP_TERMS = ["stage", "internship"]
 COOLDOWN_MINUTES = 20
@@ -68,6 +78,36 @@ def _field(text: str, name: str) -> str | None:
 def _yaml_list(text: str, name: str) -> list[str]:
     m = re.search(rf"^(\s*){name}:\s*\n((?:\1\s+- .*\n?)+)", text, re.M)
     return [line.split("- ", 1)[1].strip() for line in m.group(2).splitlines()] if m else []
+
+
+def find_config_root(start: Path) -> Path:
+    """config/ stays where colleagues edit it, and the packed engine is not beside it,
+    so it is looked for from the folder the session was opened in: that folder, the
+    ones above it, and a `talent-place` beside any of them. A1 is what makes a folder
+    the config: one merely called config is not taken."""
+    start = Path(start).resolve()
+    for folder in (start, *start.parents):
+        for candidate in (folder / "config", folder / "talent-place" / "config"):
+            if (candidate / A1_NAME).is_file():
+                return candidate
+    raise Stop("config_not_found", f"no config/{A1_NAME} at or above {start}")
+
+
+def default_config_root() -> Path:
+    return CONFIG_ROOT if (CONFIG_ROOT / A1_NAME).is_file() else find_config_root(Path.cwd())
+
+
+def masters(*, config_root=None) -> dict:
+    """Every Master that can be asked for, and whether a run could start for it."""
+    config_root = Path(config_root or default_config_root())
+    rows = []
+    for folder in sorted(p for p in config_root.iterdir() if (p / "A3-cohort.yaml").exists()):
+        try:
+            m = resolve_master(folder.name, config_root)
+            rows.append({"master": folder.name, "ready": True, "folder": str(m.dir), "problem": ""})
+        except Stop as stop:
+            rows.append({"master": folder.name, "ready": False, "folder": "", "problem": f"{stop.code}: {stop.detail}"})
+    return {"config_root": str(config_root), "masters": rows}
 
 
 def resolve_master(name: str, config_root: Path = CONFIG_ROOT) -> Master:
@@ -185,11 +225,42 @@ def coverage(run: Path, cfg: dict) -> dict:
 
 
 def run_step(cmd: list, **kw) -> subprocess.CompletedProcess:
-    return subprocess.run([str(c) for c in cmd], cwd=ENGINE, capture_output=True, text=True, **kw)
+    # UTF-8 both ways: a Windows console's own encoding cannot print every company name,
+    # and a child that fails to print its JSON looks like a child that failed.
+    env = {**os.environ, "PYTHONUTF8": "1"}
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(VENDOR), os.environ.get("PYTHONPATH", "")]))
+    return subprocess.run(
+        [str(c) for c in cmd], cwd=ENGINE, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, **kw
+    )
+
+
+def _kernel32():
+    import ctypes
+
+    return ctypes.windll.kernel32
+
+
+@contextlib.contextmanager
+def keep_awake():
+    """Windows' half of `_awake`: ask the system not to sleep while a step runs. Asking
+    can fail and the run still has `--resume`, so a failure here never stops it. It does
+    not hold a laptop awake with its lid closed."""
+    kernel = None
+    if sys.platform == "win32":
+        try:
+            kernel = _kernel32()
+            kernel.SetThreadExecutionState(0x80000001)  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+        except Exception:  # noqa: BLE001
+            kernel = None
+    try:
+        yield
+    finally:
+        if kernel is not None:
+            kernel.SetThreadExecutionState(0x80000000)  # ES_CONTINUOUS
 
 
 def _awake(cmd: list) -> list:
-    """A sleeping machine stops the run. Windows has no equivalent yet: the probe decides."""
+    """A sleeping machine stops the run. This is macOS's half; `keep_awake` is Windows'."""
     return (["caffeinate", "-i"] + cmd) if shutil.which("caffeinate") else cmd
 
 
@@ -260,6 +331,44 @@ def _run_dir(m: Master, name: str) -> Path:
     if Path(name).name != name or not run.is_dir():
         raise Stop("run_unknown", name)
     return run
+
+
+def _cards(run: Path) -> list[dict]:
+    path = run / "cards.json"
+    if not path.exists():
+        raise Stop("cards_missing", str(path))
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def cards(name: str, run_name_: str, *, config_root=CONFIG_ROOT) -> dict:
+    """What a choice of what to read needs, and no URL: those are copied, never retyped."""
+    run = _run_dir(resolve_master(name, config_root), run_name_)
+    rows = [
+        {
+            "id": c.get("sourceJobId"),
+            "title": c.get("title"),
+            "company": c.get("company"),
+            "location": c.get("location"),
+            "posted": c.get("posted"),
+            "areas": c.get("areas", []),
+            "snippet": (c.get("snippet") or "")[:200],
+        }
+        for c in _cards(run)
+    ]
+    return {"run": run.name, "count": len(rows), "cards": rows}
+
+
+def shortlist(name: str, run_name_: str, ids: list[str], *, config_root=CONFIG_ROOT) -> dict:
+    """Write shortlist.json by copying whole cards. A card typed out again is how a URL
+    gets changed on the way."""
+    run = _run_dir(resolve_master(name, config_root), run_name_)
+    by_id = {str(c.get("sourceJobId")): c for c in _cards(run)}
+    wanted = list(dict.fromkeys(str(i) for i in ids))
+    unknown = [i for i in wanted if i not in by_id]
+    if unknown:
+        raise Stop("card_unknown", ", ".join(unknown))
+    (run / "shortlist.json").write_text(json.dumps([by_id[i] for i in wanted], ensure_ascii=False, indent=1), encoding="utf-8")
+    return {"run": run.name, "shortlisted": len(wanted), "of": len(by_id)}
 
 
 def read(name: str, run_name_: str, *, config_root=CONFIG_ROOT, shortlist=None) -> dict:
@@ -338,7 +447,16 @@ def publish(name: str, run_name_: str, *, config_root=CONFIG_ROOT, today: str | 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--config-root", help="the config/ folder; found from the current folder when omitted")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("masters", help="the Masters a run can be started for")
+    p = sub.add_parser("cards", help="the cards a run found, compactly, to choose what to read")
+    p.add_argument("--master", required=True)
+    p.add_argument("--run", required=True)
+    p = sub.add_parser("shortlist", help="write shortlist.json from card ids")
+    p.add_argument("--master", required=True)
+    p.add_argument("--run", required=True)
+    p.add_argument("--ids", nargs="+", required=True)
     p = sub.add_parser("prepare", help="doctor, export-history, run.json and discover")
     p.add_argument("--master", required=True)
     p.add_argument("--recency-days", type=int, help="overrides the computed window (record the reason in the report)")
@@ -352,14 +470,27 @@ def main() -> int:
     p.add_argument("--run", required=True)
     p.add_argument("--confirm", action="store_true")
     args = parser.parse_args()
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
     try:
-        if args.command == "prepare":
+        root = Path(args.config_root) if args.config_root else default_config_root()
+        if args.config_root and not (root / A1_NAME).is_file():
+            raise Stop("config_not_found", f"no {A1_NAME} in {root}")
+        if args.command == "masters":
+            out = masters(config_root=root)
+        elif args.command == "cards":
+            out = cards(args.master, args.run, config_root=root)
+        elif args.command == "shortlist":
+            out = shortlist(args.master, args.run, args.ids, config_root=root)
+        elif args.command == "prepare":
             days = AUTO if args.recency_days is None else args.recency_days
-            out = prepare(args.master, days=days, locations=args.locations)
+            with keep_awake():
+                out = prepare(args.master, config_root=root, days=days, locations=args.locations)
         elif args.command == "read":
-            out = read(args.master, args.run, shortlist=args.shortlist)
+            with keep_awake():
+                out = read(args.master, args.run, config_root=root, shortlist=args.shortlist)
         else:
-            out = publish(args.master, args.run, confirm=args.confirm)
+            out = publish(args.master, args.run, config_root=root, confirm=args.confirm)
     except Stop as stop:
         print(json.dumps({"stop": stop.code, "detail": stop.detail}, ensure_ascii=False, indent=2))
         return 3

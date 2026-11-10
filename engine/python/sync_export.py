@@ -837,7 +837,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     # Is this actually on a OneDrive File Provider mount? Guessing wrong would
     # silently write somewhere colleagues cannot see.
+    mount = "on a OneDrive File Provider mount"
     try:
+        if sys.platform != "darwin":
+            # The question below is macOS's. Failing it everywhere else taught people
+            # to ignore the check, so it says what it did not do instead.
+            raise NotImplementedError
         import subprocess
 
         out = subprocess.run(
@@ -855,6 +860,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             on_mount = False
             detail = out.stderr.strip() or "no file-provider xattr (not inside a sync domain)"
         check("on a OneDrive File Provider mount", on_mount, detail)
+    except NotImplementedError:
+        check(mount, True, f"not checked on this system ({sys.platform}): confirm the folder is inside OneDrive")
     except FileNotFoundError:
         check("on a OneDrive File Provider mount", False, "xattr command not available")
     except Exception as exc:  # noqa: BLE001

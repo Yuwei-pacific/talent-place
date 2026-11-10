@@ -466,6 +466,120 @@ class TestResolve(Master):
         self.assertFalse(self.master_dir.exists())
 
 
+class TestConfigRoot(Master):
+    """The packed engine no longer sits beside config/, so it has to be found."""
+
+    def test_found_from_a_folder_below_the_repo(self):
+        deep = self.tmp / "repo" / "engine" / "python"
+        deep.mkdir(parents=True)
+        (self.config / "A1-regole-ricerca.md").write_text("A1", encoding="utf-8")
+        self.assertEqual(job_run.find_config_root(deep).resolve(), self.config.resolve())
+
+    def test_found_from_the_folder_that_holds_the_repo(self):
+        (self.config / "A1-regole-ricerca.md").write_text("A1", encoding="utf-8")
+        (self.tmp / "repo").rename(self.tmp / "talent-place")
+        found = job_run.find_config_root(self.tmp)
+        self.assertEqual(found.resolve(), (self.tmp / "talent-place" / "config").resolve())
+
+    def test_found_from_a_sibling_such_as_the_publish_folder(self):
+        (self.config / "A1-regole-ricerca.md").write_text("A1", encoding="utf-8")
+        (self.tmp / "repo").rename(self.tmp / "talent-place")
+        self.assertTrue(job_run.find_config_root(self.master_dir).samefile(self.tmp / "talent-place" / "config"))
+
+    def test_a_folder_that_only_looks_like_config_is_not_taken(self):
+        with self.assertRaises(job_run.Stop) as ctx:
+            job_run.find_config_root(self.tmp / "repo")
+        self.assertEqual(ctx.exception.code, "config_not_found")
+
+    def test_masters_lists_each_one_and_whether_its_folder_is_there(self):
+        other = self.config / "Accessory design ED.14"
+        other.mkdir()
+        (other / "A3-cohort.yaml").write_text(A3.format(history="../../../out/missing/Review.xlsx"), encoding="utf-8")
+        rows = {r["master"]: r for r in job_run.masters(config_root=self.config)["masters"]}
+        self.assertTrue(rows["Strategic design ED.28"]["ready"])
+        self.assertFalse(rows["Accessory design ED.14"]["ready"])
+        self.assertTrue(rows["Accessory design ED.14"]["problem"])
+
+
+class TestPortability(Master):
+    def test_children_speak_utf8_and_see_the_packed_openpyxl(self):
+        seen = {}
+
+        def fake(cmd, **kw):
+            seen.update(kw)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(job_run.subprocess, "run", side_effect=fake):
+            job_run.run_step(["x"])
+        self.assertEqual(seen["encoding"], "utf-8")
+        self.assertEqual(seen["env"]["PYTHONUTF8"], "1")
+        self.assertIn(str(job_run.HERE / "vendor"), seen["env"]["PYTHONPATH"])
+
+    def test_windows_is_kept_awake_for_the_run_and_released_after(self):
+        calls = []
+        kernel = mock.Mock()
+        kernel.SetThreadExecutionState.side_effect = lambda flags: calls.append(flags)
+        with mock.patch.object(job_run.sys, "platform", "win32"), mock.patch.object(job_run, "_kernel32", lambda: kernel):
+            with job_run.keep_awake():
+                self.assertEqual(calls, [0x80000001])
+        self.assertEqual(calls, [0x80000001, 0x80000000])
+
+    def test_keeping_awake_never_stops_a_run(self):
+        def broken():
+            raise OSError("no kernel32")
+
+        with mock.patch.object(job_run.sys, "platform", "win32"), mock.patch.object(job_run, "_kernel32", broken):
+            with job_run.keep_awake():
+                pass
+
+    def test_doctor_does_not_fail_the_mount_check_where_it_cannot_ask(self):
+        proc_args = [sys.executable, str(HERE / "sync_export.py"), "doctor", "--dir", str(self.master_dir)]
+        with mock.patch.object(sync_export.sys, "platform", "win32"):
+            import argparse, io, contextlib
+
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                sync_export.cmd_doctor(argparse.Namespace(dir=str(self.master_dir)))
+        checks = {c["check"]: c for c in json.loads(buf.getvalue())["checks"]}
+        mount = [c for name, c in checks.items() if "OneDrive" in name]
+        self.assertEqual(len(mount), 1)
+        self.assertTrue(mount[0]["ok"], mount[0])
+        self.assertIn("not checked", mount[0]["detail"])
+
+
+class TestShortlist(Master):
+    def setUp(self):
+        super().setUp()
+        self.run_dir = self.master_dir / "_machine" / "runs" / "2026-11-03-strategic-design-ED28"
+        self.run_dir.mkdir(parents=True)
+        self.cards = [
+            {"sourceJobId": "11", "title": "Service Design Intern", "company": "A", "location": "Milan, Italy",
+             "url": "https://it.linkedin.com/jobs/view/11", "posted": "2 days ago", "areas": ["Service Design / CX"], "snippet": "x" * 500},
+            {"sourceJobId": "22", "title": "UX Intern", "company": "B", "location": "Rome, Italy",
+             "url": "https://it.linkedin.com/jobs/view/22", "posted": "1 week ago", "areas": ["Product / UX"]},
+        ]
+        (self.run_dir / "cards.json").write_text(json.dumps(self.cards), encoding="utf-8")
+
+    def test_cards_are_copied_whole_not_retyped(self):
+        out = job_run.shortlist("Strategic design ED.28", self.run_dir.name, ["22"], config_root=self.config)
+        self.assertEqual(out["shortlisted"], 1)
+        self.assertEqual(json.loads((self.run_dir / "shortlist.json").read_text(encoding="utf-8")), [self.cards[1]])
+
+    def test_an_id_the_run_never_saw_stops_and_writes_nothing(self):
+        with self.assertRaises(job_run.Stop) as ctx:
+            job_run.shortlist("Strategic design ED.28", self.run_dir.name, ["22", "99"], config_root=self.config)
+        self.assertEqual(ctx.exception.code, "card_unknown")
+        self.assertIn("99", ctx.exception.detail)
+        self.assertFalse((self.run_dir / "shortlist.json").exists())
+
+    def test_the_listing_is_compact_and_keeps_what_a_choice_needs(self):
+        rows = job_run.cards("Strategic design ED.28", self.run_dir.name, config_root=self.config)["cards"]
+        self.assertEqual([r["id"] for r in rows], ["11", "22"])
+        self.assertEqual(rows[0]["areas"], ["Service Design / CX"])
+        self.assertNotIn("url", rows[0])
+        self.assertLessEqual(len(rows[0]["snippet"]), 200)
+
+
 class TestRunConfig(Master):
     def test_terms_come_from_a2_and_places_from_a3(self):
         cfg = job_run.run_config(self.resolve(), recency_days=7)
