@@ -1,0 +1,7 @@
+{
+  "name": "talent-placement",
+  "displayName": "Talent Placement",
+  "version": "0.1.0",
+  "description": "Ricerca stage per i Master POLI.design: cerca gli annunci, li valuta secondo A1-A4 e, dopo la tua conferma, aggiunge le aziende nuove a Review.xlsx. Funziona nella scheda Code dell'app Claude, sul computer.",
+  "author": { "name": "POLI.design Talent Placement" }
+}

@@ -175,6 +175,18 @@ plugin/talent-placement/
 
 新增 `engine/scripts/build-plugin` 打包脚本（`npm run build` → 复制 → 生成 zip）。
 
+### 第一版（2026-11-10）
+
+已做：`plugin/talent-placement/`，含 `cerca-stage` 和 `diagnostica`；`plugin/build.py` 生成 zip。引擎放在 `cerca-stage` skill 里，`config/` 不打包，由入口从会话所在文件夹找到。
+
+和上面设计的差别：
+- **不接 Indeed：** 报告里写 `Unavailable`。`build_tsv` 只接受来自卡片或 `employer-checks.csv` 的 URL，Indeed 找到的职位目前没有入口。
+- **不处理 `similar_name`：** 只列给同事看并写进报告，不写 `company-aliases.csv`。那个文件要填规范化后的名称和已有的 Company ID，不适合让同事在对话里完成。
+- **不核实雇主页面：** 第一版不调用 `verify`，状态如实写成“只在 LinkedIn 上读过”。
+- **没有 `nuovo-master` 和 `nuova-edizione`。**
+
+还没验证：在 Windows 上完整跑一次（同时就是 T6）；`SetThreadExecutionState` 防休眠只用模拟测过；Team 账号；同事的电脑。
+
 ## 阶段 3：交接（最后 1 周）
 
 - **陪跑 2 次：** 第 1 次同事操作、Yuwei 在旁边；第 2 次同事独立完成，Yuwei 只事后检查。第 2 次通过才算完成。**如果新 Master 的材料已经到位**，再用 `nuovo-master` 实际走一遍。
