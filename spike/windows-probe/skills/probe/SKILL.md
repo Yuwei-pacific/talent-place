@@ -31,7 +31,7 @@ The colleague must have attached two folders:
 
 If either is missing, ask for it. If `PROBE` answers `REFUSED`, that is the safety check working: ask for the right folder and do not rename anything.
 
-Ask them to right-click the test folder and choose *Mantieni sempre su questo dispositivo* (Always keep on this device), and to wait for the sync to finish. A file that has only just arrived on this computer is online-only, which would make the next tests fail for the wrong reason.
+Ask them to right-click the test folder and choose *Conserva sempre in questo dispositivo* (Always keep on this device), and to wait for the sync to finish. A file that has only just arrived on this computer is online-only, which would make the next tests fail for the wrong reason.
 
 ## The test
 
@@ -47,7 +47,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/probe.py" state --master "<TEST-folder-path
 Then the steps that need the colleague. Wait for their confirmation before each command:
 
 1. Ask them to open `Review.xlsx` from the test folder in Excel and leave it open. Run `state` with `--label excel-open`. Ask them to close it.
-2. Ask them to right-click `Review.xlsx` and choose *Libera spazio* (Free up space). Run `state` with `--label online-only`. Then ask them to choose *Mantieni sempre su questo dispositivo* for it again, which the full run needs.
+2. Ask them to right-click `Review.xlsx` and choose *Libera spazio* (Free up space). Run `state` with `--label online-only`. Then ask them to choose *Conserva sempre in questo dispositivo* for it again, which the full run needs.
 3. Ask them to check two things and note them on `FOGLIO-risultati`: `probe-roundtrip.xlsx` opens in Excel, and `probe-marker-*.txt` appears on the OneDrive website.
 
 ## Indeed connector
